@@ -64,7 +64,10 @@ def nachricht_senden(text: str) -> dict:
     text: Nachrichtentext (max. 4096 Zeichen, reiner Text ohne Markdown-Formatierung).
     Gibt bei Erfolg message_id und Zeitpunkt zurueck.
     """
-    return client.send_message(text)
+    result = client.send_message(text)
+    if poller is not None:
+        poller.notify_reply_sent()
+    return result
 
 
 @mcp.tool()

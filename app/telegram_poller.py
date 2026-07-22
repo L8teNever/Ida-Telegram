@@ -23,6 +23,15 @@ ersten neuen Nachricht wird kurz (AUTOREPLY_DEBOUNCE_SECONDS) weiter auf
 Nachschub gewartet -- dieses Warten IST der naechste long-poll-Aufruf, keine
 zusaetzliche Sleep-Schleife. Kommt in der Zeit nichts mehr, wird die Routine
 genau einmal getriggert statt einmal pro Nachricht.
+
+Sobald eine Nachricht erkannt wird, zeigt ein eigener Hintergrund-Thread
+Telegrams "tippt..."-Status an, bis die Antwort tatsaechlich rausgeht (oder
+eine Sicherheitsobergrenze erreicht ist). Telegrams sendChatAction laeuft
+laut offizieller Doku nach hoechstens 5 Sekunden von selbst ab, deshalb wird
+er alle _TYPING_REPEAT_SECONDS (< 5s) ohne Pause neu gesendet -- eine Pause
+wuerde die Anzeige sichtbar verschwinden lassen. app/server.py ruft beim
+tatsaechlichen Versand (nachricht_senden) notify_reply_sent() auf, das
+stoppt die Schleife sofort.
 """
 
 from __future__ import annotations
@@ -45,6 +54,15 @@ _LONG_POLL_TIMEOUT = 30
 _ERROR_BACKOFF_SECONDS = 5
 _TRIGGER_TIMEOUT_SECONDS = 15
 _FILE_DOWNLOAD_TIMEOUT_SECONDS = 30
+
+# Telegrams "tippt..."-Status laeuft laut Bot-API-Doku nach hoechstens 5s ab
+# ("The status is set for 5 seconds or less") -- deshalb deutlich darunter
+# neu senden, sonst blinkt die Anzeige sichtbar aus und wieder ein.
+_TYPING_REPEAT_SECONDS = 4
+# Sicherheitsobergrenze, falls die Routine nie antwortet (Fehler, Timeout) --
+# damit "tippt..." nicht ewig weiterlaeuft, sondern irgendwann von selbst
+# aufhoert, wenn nichts mehr passiert.
+_TYPING_MAX_SECONDS = 300
 
 # https://platform.claude.com/docs/en/api/claude-code/routines-fire
 _ROUTINE_FIRE_URL = "https://api.anthropic.com/v1/claude_code/routines/{routine_id}/fire"
@@ -74,6 +92,38 @@ class TelegramPoller:
 
         self._pending_lock = threading.Lock()
         self._pending_entries: list[dict[str, Any]] = []
+
+        self._typing_lock = threading.Lock()
+        self._typing_stop_event: threading.Event | None = None
+
+    def notify_reply_sent(self) -> None:
+        """Von app.server.nachricht_senden aufgerufen, sobald tatsaechlich
+        eine Antwort rausgegangen ist -- stoppt die laufende
+        "tippt..."-Anzeige sofort, statt auf die Sicherheitsobergrenze zu
+        warten."""
+        with self._typing_lock:
+            if self._typing_stop_event is not None:
+                self._typing_stop_event.set()
+
+    def _keep_typing_until_reply(self) -> None:
+        stop_event = threading.Event()
+        with self._typing_lock:
+            self._typing_stop_event = stop_event
+        try:
+            deadline = time.monotonic() + _TYPING_MAX_SECONDS
+            while time.monotonic() < deadline:
+                try:
+                    self._telegram.send_chat_action("typing")
+                except Exception:
+                    log.exception("Tipp-Anzeige (sendChatAction) fehlgeschlagen")
+                # wait() statt sleep(): wacht sofort auf, wenn notify_reply_sent()
+                # zwischendurch feuert, statt bis zum naechsten Intervall zu warten.
+                if stop_event.wait(timeout=_TYPING_REPEAT_SECONDS):
+                    break
+        finally:
+            with self._typing_lock:
+                if self._typing_stop_event is stop_event:
+                    self._typing_stop_event = None
 
     def pending_entries(self) -> list[dict[str, Any]]:
         """Vom MCP-Tool neue_nachrichten_abrufen aufgerufen: gibt die
@@ -199,6 +249,16 @@ class TelegramPoller:
                 entries = self._entries_from(updates)
                 if not entries:
                     continue
+
+                # Ab hier "tippt..." anzeigen -- schon waehrend des
+                # Debounce-Wartens unten, nicht erst beim eigentlichen
+                # Routine-Trigger, damit es ab dem Erkennen der Nachricht
+                # durchgehend sichtbar ist.
+                threading.Thread(
+                    target=self._keep_typing_until_reply,
+                    name="telegram-typing",
+                    daemon=True,
+                ).start()
 
                 batch = self._collect_batch(entries)
                 with self._pending_lock:

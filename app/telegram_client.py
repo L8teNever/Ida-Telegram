@@ -70,6 +70,16 @@ class TelegramClient:
             "zeitpunkt": result.get("date"),
         }
 
+    def send_chat_action(self, action: str = "typing") -> None:
+        """Zeigt kurzzeitig einen Status (z.B. 'tippt...') im Chat. Rein
+        kosmetisch, kein Rueckgabewert fuer Claude noetig -- wird nur intern
+        vom Autoreply-Loop benutzt, um waehrend des Wartens auf die Routine
+        "tippt..." anzuzeigen (siehe app/telegram_poller.py)."""
+        self._call(
+            "sendChatAction",
+            {"chat_id": self._settings.telegram_chat_id, "action": action},
+        )
+
     def bot_status(self) -> dict:
         result = self._call("getMe", {})
         return {
