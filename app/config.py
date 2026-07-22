@@ -6,12 +6,6 @@ import os
 import sys
 from dataclasses import dataclass
 
-DEFAULT_SYSTEM_PROMPT = (
-    "Du antwortest automatisch auf Telegram-Nachrichten fuer den Kontobesitzer. "
-    "Antworte kurz, freundlich und hilfreich auf Deutsch. Wenn du etwas nicht "
-    "sicher beantworten kannst, sag das ehrlich statt zu raten."
-)
-
 
 class ConfigError(RuntimeError):
     pass
@@ -46,10 +40,8 @@ class Settings:
     mcp_port: int
 
     autoreply_enabled: bool
-    anthropic_api_key: str
-    claude_model: str
-    claude_system_prompt: str
-    claude_effort: str
+    routine_trigger_url: str
+    routine_api_key: str
     autoreply_debounce_seconds: int
 
 
@@ -63,8 +55,11 @@ def load_settings() -> Settings:
             )
 
         autoreply_enabled = _optional_bool("AUTOREPLY_ENABLED", True)
-        anthropic_api_key = (
-            _require("ANTHROPIC_API_KEY") if autoreply_enabled else _optional("ANTHROPIC_API_KEY", "")
+        routine_trigger_url = (
+            _require("ROUTINE_TRIGGER_URL") if autoreply_enabled else _optional("ROUTINE_TRIGGER_URL", "")
+        )
+        routine_api_key = (
+            _require("ROUTINE_API_KEY") if autoreply_enabled else _optional("ROUTINE_API_KEY", "")
         )
 
         settings = Settings(
@@ -74,10 +69,8 @@ def load_settings() -> Settings:
             mcp_host=_optional("MCP_HOST", "0.0.0.0"),
             mcp_port=int(_optional("MCP_PORT", "8001")),
             autoreply_enabled=autoreply_enabled,
-            anthropic_api_key=anthropic_api_key,
-            claude_model=_optional("CLAUDE_MODEL", "claude-opus-4-8"),
-            claude_system_prompt=_optional("CLAUDE_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
-            claude_effort=_optional("CLAUDE_EFFORT", "medium"),
+            routine_trigger_url=routine_trigger_url,
+            routine_api_key=routine_api_key,
             autoreply_debounce_seconds=int(_optional("AUTOREPLY_DEBOUNCE_SECONDS", "3")),
         )
     except ConfigError as exc:

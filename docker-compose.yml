@@ -18,13 +18,11 @@ services:
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Bitte MCP_AUTH_TOKEN in .env setzen}
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8001
-      # Automatisches Antworten -- ANTHROPIC_API_KEY wird nur validiert,
-      # wenn AUTOREPLY_ENABLED=true ist (siehe app/config.py).
+      # Automatisches Antworten -- ROUTINE_TRIGGER_URL/ROUTINE_API_KEY werden
+      # nur validiert, wenn AUTOREPLY_ENABLED=true ist (siehe app/config.py).
       AUTOREPLY_ENABLED: ${AUTOREPLY_ENABLED:-true}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-opus-4-8}
-      CLAUDE_EFFORT: ${CLAUDE_EFFORT:-medium}
-      CLAUDE_SYSTEM_PROMPT: ${CLAUDE_SYSTEM_PROMPT:-}
+      ROUTINE_TRIGGER_URL: ${ROUTINE_TRIGGER_URL:-}
+      ROUTINE_API_KEY: ${ROUTINE_API_KEY:-}
       AUTOREPLY_DEBOUNCE_SECONDS: ${AUTOREPLY_DEBOUNCE_SECONDS:-3}
 
     healthcheck:

@@ -6,6 +6,12 @@ damit es per Remote-MCP-Verbindung (z.B. ueber einen Cloudflare Tunnel)
 genutzt werden kann. Der Endpunkt ist per Shared-Secret-Token abgesichert
 (siehe app/auth.py). Absichtlich kein Parameter fuer eine andere chat_id --
 dieser Server kann strukturell nur an die eine konfigurierte Person schreiben.
+
+Wenn AUTOREPLY_ENABLED=true erkennt ein Hintergrund-Loop (app/telegram_poller.py)
+neue Telegram-Nachrichten und triggert dafuer eine claude.ai Routine ueber
+deren eigenen API-Token (ROUTINE_TRIGGER_URL/ROUTINE_API_KEY). Der Container
+ruft dabei selbst keine Claude-API auf -- die Routine liest die Nachricht(en)
+ueber das Tool neue_nachrichten_abrufen und antwortet ueber nachricht_senden.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from starlette.responses import JSONResponse
 from app.auth import BearerAuthMiddleware
 from app.config import load_settings
 from app.telegram_client import TelegramClient
+from app.telegram_poller import TelegramPoller, start_background
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -27,21 +34,16 @@ log = logging.getLogger("ida-telegram")
 
 settings = load_settings()
 client = TelegramClient(settings)
-
-if settings.autoreply_enabled:
-    from app.claude_client import ClaudeClient
-    from app.telegram_poller import start_background
-
-    _claude_client = ClaudeClient(settings)
-else:
-    _claude_client = None
+poller = TelegramPoller(settings, client) if settings.autoreply_enabled else None
 
 mcp = FastMCP(
     "Ida-Telegram",
     instructions=(
-        "Werkzeug, um der einen fest konfigurierten Person eine Telegram-"
-        "Nachricht zu schicken. Es gibt keinen Empfaenger-Parameter -- jede "
-        "Nachricht geht an genau die in TELEGRAM_CHAT_ID hinterlegte Person."
+        "Zwei Werkzeuge fuer die eine fest konfigurierte Person: "
+        "neue_nachrichten_abrufen liest, was sie gerade geschrieben hat, "
+        "nachricht_senden schickt eine Antwort. Es gibt keinen Empfaenger-"
+        "Parameter -- beide Tools betreffen immer nur die in TELEGRAM_CHAT_ID "
+        "hinterlegte Person."
     ),
     host=settings.mcp_host,
     port=settings.mcp_port,
@@ -56,6 +58,19 @@ def nachricht_senden(text: str) -> dict:
     Gibt bei Erfolg message_id und Zeitpunkt zurueck.
     """
     return client.send_message(text)
+
+
+@mcp.tool()
+def neue_nachrichten_abrufen() -> dict:
+    """Gibt die Telegram-Nachricht(en) zurueck, die diesen Lauf ausgeloest haben.
+
+    Jede Nachricht wird nur einmal ausgeliefert (Zwischenspeicher wird beim
+    Abrufen geleert). Leere Liste, wenn AUTOREPLY_ENABLED=false ist oder
+    gerade keine neue Nachricht ansteht.
+    """
+    if poller is None:
+        return {"nachrichten": []}
+    return {"nachrichten": poller.pending_messages()}
 
 
 @mcp.tool()
@@ -85,8 +100,8 @@ def main() -> None:
         settings.mcp_host,
         settings.mcp_port,
     )
-    if settings.autoreply_enabled:
-        start_background(settings, client, _claude_client)
+    if poller is not None:
+        start_background(poller)
     else:
         log.info("AUTOREPLY_ENABLED=false -- automatisches Antworten ist deaktiviert.")
     # access_log=False: uvicorn wuerde sonst jede Request-Zeile inkl. vollem

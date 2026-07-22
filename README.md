@@ -3,12 +3,12 @@
 Ein eigenständiger MCP-Server (Model Context Protocol), getrennt von
 Ida-Untis und ohne Verbindung dazu. Zwei Dinge in einem Container:
 
-1. Ein MCP-Werkzeug für Claude: einer fest konfigurierten Person eine
-   Telegram-Nachricht schicken.
-2. Ein automatischer Antwort-Bot: sobald diese Person dem Telegram-Bot
-   schreibt, liest der Server die Nachricht und lässt sie direkt über die
-   Claude-API (Anthropic) beantworten -- unabhängig vom MCP-Tool, läuft im
-   Hintergrund im selben Container.
+1. Zwei MCP-Werkzeuge für Claude: einer fest konfigurierten Person eine
+   Telegram-Nachricht schicken (`nachricht_senden`), und lesen, was sie
+   gerade geschrieben hat (`neue_nachrichten_abrufen`).
+2. Ein Hintergrund-Loop, der neue Telegram-Nachrichten erkennt und dafür
+   eine **claude.ai Routine** triggert -- die Routine liest die Nachricht
+   dann selbst über die MCP-Tools oben und antwortet.
 
 Läuft als Docker-Container und wird über einen bestehenden Cloudflare
 Tunnel unter einer eigenen Domain erreichbar gemacht.
@@ -16,25 +16,33 @@ Tunnel unter einer eigenen Domain erreichbar gemacht.
 ## Architektur
 
 ```
-Claude (MCP)  --https-->  Cloudflare Tunnel (öffentliche Domain)
-                                  |
-                                  v
-                       127.0.0.1:8001 auf deinem Server
-                                  |
-                                  v
-                    Docker-Container "ida-telegram-mcp"
-                       |                        |
-                       v                        v
-              Telegram Bot HTTP-API      Claude API (Anthropic)
-                       ^
-                       | (long-polling, ausgehend)
-                  Telegram-Nutzer schreibt dem Bot
+                          claude.ai Routine (Cloud-Agent)
+                           |                        ^
+                    (per API-Trigger)      (MCP: nachricht_senden,
+                           |                neue_nachrichten_abrufen)
+                           |                        |
+                           |                        v
+Claude (MCP-Client)  --https-->  Cloudflare Tunnel (öffentliche Domain)
+                                          |
+                                          v
+                              127.0.0.1:8001 auf deinem Server
+                                          |
+                                          v
+                          Docker-Container "ida-telegram-mcp"
+                                          ^
+                                          | (long-polling, ausgehend)
+                                 Telegram Bot HTTP-API
+                                          ^
+                                Telegram-Nutzer schreibt dem Bot
 ```
 
-Der Auto-Antwort-Teil braucht **keinen** zusätzlichen öffentlichen Endpunkt:
-der Container fragt Telegram aktiv per Long-Polling ab (ausgehende
-Verbindung), es muss also nichts zusätzlich im Cloudflare Tunnel
-freigeschaltet werden.
+Wichtig: **Dieser Container ruft selbst nie eine Claude-API auf.** Er macht
+nur zwei Dinge -- Telegram per Long-Polling nach neuen Nachrichten fragen,
+und bei neuen Nachrichten eine claude.ai Routine über deren eigenen
+API-Trigger anstoßen. Die eigentliche "Intelligenz" (Nachricht lesen,
+Antwort formulieren) läuft komplett in der Routine bei Anthropic, die sich
+dafür ganz normal als MCP-Client mit diesem Server verbindet -- genau wie
+Claude Code oder claude.ai es auch tun.
 
 Der Container published seinen Port **nur auf `127.0.0.1`** -- von außen
 nicht direkt erreichbar, nur über den bereits laufenden `cloudflared`-Prozess.
@@ -53,6 +61,7 @@ verdrahtet statt frei wählbar.
 - Docker + Docker Compose auf dem Server
 - Ein bereits eingerichteter und verbundener Cloudflare Tunnel auf diesem Server
 - Ein Telegram-Bot (in wenigen Minuten selbst erstellt, siehe unten)
+- Ein claude.ai-Account, um die Routine anzulegen
 
 ## 1. Telegram-Bot erstellen
 
@@ -66,7 +75,7 @@ verdrahtet statt frei wählbar.
    `https://api.telegram.org/bot<TOKEN>/getUpdates`
    Im JSON nach `"chat":{"id": ...}` suchen -- das ist die `chat_id`.
 
-## 2. Einrichten
+## 2. Einrichten, bauen, starten
 
 ```bash
 git clone https://github.com/<dein-user>/Ida-Telegram.git
@@ -74,41 +83,17 @@ cd Ida-Telegram
 cp .env.example .env
 ```
 
-`.env` ausfüllen:
+`.env` erstmal mit `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` und
+`MCP_AUTH_TOKEN` ausfüllen (siehe Tabelle unten) -- `ROUTINE_TRIGGER_URL`
+und `ROUTINE_API_KEY` folgen in Schritt 5, dafür muss der Server erst
+erreichbar sein.
 
-| Variable | Bedeutung |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Token von @BotFather |
-| `TELEGRAM_CHAT_ID` | Die eine feste Ziel-Person (siehe Schritt 1) |
-| `MCP_AUTH_TOKEN` | Langes Zufalls-Token, das Claude beim Verbinden mitschicken muss. Erzeugen mit `openssl rand -hex 32` |
-| `MCP_PORT` | Lokaler Port (Standard `8001`, damit es neben Ida-Untis auf 8000 laufen kann) |
-| `AUTOREPLY_ENABLED` | `true`/`false` -- automatisches Antworten an/aus (Standard `true`) |
-| `ANTHROPIC_API_KEY` | API-Key von [console.anthropic.com](https://console.anthropic.com) -> API Keys. Nur nötig, wenn `AUTOREPLY_ENABLED=true` |
-| `CLAUDE_MODEL` | Modell für automatische Antworten (Standard `claude-opus-4-8`) |
-| `CLAUDE_EFFORT` | `low`/`medium`/`high`/`xhigh`/`max` -- wie gründlich (und teuer) Claude nachdenkt (Standard `medium`) |
-| `CLAUDE_SYSTEM_PROMPT` | Persona/Verhalten der automatischen Antworten, frei anpassbar |
-| `AUTOREPLY_DEBOUNCE_SECONDS` | Wartezeit nach der letzten Nachricht, bevor geantwortet wird (Standard `3`) |
-| `GITHUB_OWNER` | Dein GitHub-Benutzername in Kleinbuchstaben (für das Image aus GHCR) |
-
-**Der Standard-System-Prompt** (in `.env.example` schon vorausgefüllt, direkt
-anpassbar):
-
-> Du antwortest automatisch auf Telegram-Nachrichten für den Kontobesitzer.
-> Antworte kurz, freundlich und hilfreich auf Deutsch. Wenn du etwas nicht
-> sicher beantworten kannst, sag das ehrlich statt zu raten.
-
-## 3. Image bauen lassen (GitHub Actions)
-
-Bei jedem Push auf `main` baut `.github/workflows/docker-publish.yml` das
-Image automatisch und veröffentlicht es nach
-`ghcr.io/<dein-user>/ida-telegram:latest`.
-
-Damit `docker compose` es ohne Login ziehen kann, einmalig auf öffentlich
-stellen: GitHub -> Profil -> **Packages** -> `ida-telegram` -> Package
-settings -> Change visibility -> Public. (Oder `docker login ghcr.io` auf
-dem Server, falls privat bleiben soll.)
-
-## 4. Starten
+Image bauen lassen: Bei jedem Push auf `main` baut
+`.github/workflows/docker-publish.yml` das Image automatisch nach
+`ghcr.io/<dein-user>/ida-telegram:latest`. Einmalig auf öffentlich stellen
+(GitHub -> Profil -> **Packages** -> `ida-telegram` -> Package settings ->
+Change visibility -> Public), damit `docker compose` es ohne Login ziehen
+kann.
 
 ```bash
 docker compose pull
@@ -116,7 +101,12 @@ docker compose up -d
 docker compose logs -f
 ```
 
-## 5. An den bestehenden Cloudflare Tunnel anbinden
+(Mit `AUTOREPLY_ENABLED=true` als Standard startet der Container zunächst
+mit Fehler, weil `ROUTINE_TRIGGER_URL`/`ROUTINE_API_KEY` noch fehlen --
+das ist normal, kommt in Schritt 5. Alternativ jetzt schon `AUTOREPLY_ENABLED=false`
+setzen und später wieder auf `true`.)
+
+## 3. An den bestehenden Cloudflare Tunnel anbinden
 
 Analog zu Ida-Untis, nur mit eigenem Hostname und Port 8001:
 
@@ -130,58 +120,71 @@ ingress:
 (Bzw. im Zero-Trust-Dashboard unter Public Hostname eintragen.) Danach
 `cloudflared` neu laden.
 
-## 6. Mit Claude verbinden
+## 4. Als claude.ai Connector hinzufügen
 
-Endpunkt: `https://telegram.deine-domain.de/mcp` (Streamable HTTP). Token via:
+Genau wie bei Ida-Untis: claude.ai -> Einstellungen -> Connectors -> Add
+custom connector -> als URL
+`https://telegram.deine-domain.de/mcp?token=<MCP_AUTH_TOKEN>` eintragen.
 
-- Header `Authorization: Bearer <MCP_AUTH_TOKEN>`
-- Header `X-API-Key: <MCP_AUTH_TOKEN>`
-- Query-Parameter `?token=<MCP_AUTH_TOKEN>` (falls der Client keinen Header
-  konfigurieren lässt, z.B. manche Custom-Connector-UIs)
+## 5. Routine anlegen (der eigentliche Auto-Antwort-Teil)
 
-**Claude Code CLI:**
+1. Auf [claude.ai/code/routines](https://claude.ai/code/routines) -> **Neue
+   Routine**.
+2. **Name:** z.B. "Ida Telegram Autoreply".
+3. **Anweisungen:**
+   > Du bist der Telegram-Assistent. Ruf ueber den Ida-Telegram-Connector das
+   > Tool `neue_nachrichten_abrufen` auf, um zu sehen, was gerade geschrieben
+   > wurde. Antworte darauf kurz, freundlich und hilfreich auf Deutsch, indem
+   > du das Tool `nachricht_senden` verwendest. Wenn `neue_nachrichten_abrufen`
+   > keine Nachrichten liefert, mach nichts.
+4. **Trigger:** "API" auswählen (nicht Zeitplan). claude.ai zeigt dir danach
+   eine **Trigger-URL** und einen **API-Token** an -- beide einmalig
+   notieren, der Token wird danach nicht mehr im Klartext angezeigt.
+5. Bei **Konnektoren** den gerade hinzugefügten `Ida-Telegram`-Connector
+   auswählen.
+6. Routine speichern.
+7. Die notierten Werte in `.env` eintragen:
 
 ```bash
-claude mcp add --transport http ida-telegram \
-  https://telegram.deine-domain.de/mcp \
-  --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
+ROUTINE_TRIGGER_URL=<die-angezeigte-trigger-url>
+ROUTINE_API_KEY=<der-angezeigte-api-token>
 ```
 
-**claude.ai / Claude Desktop (Custom Connector):** Einstellungen ->
-Connectors -> Add custom connector -> als URL
-`https://telegram.deine-domain.de/mcp?token=<MCP_AUTH_TOKEN>` eintragen,
-OAuth-Felder leer lassen.
+8. Neu starten: `docker compose up -d`
 
-## Verfügbare Tools
+Ab jetzt: schreibt die konfigurierte Person dem Telegram-Bot, triggert der
+Container die Routine, die Routine liest die Nachricht über MCP und
+antwortet über MCP zurück auf Telegram.
+
+## Verfügbare MCP-Tools
 
 | Tool | Zweck |
 |---|---|
 | `nachricht_senden(text)` | Schickt `text` an die fest konfigurierte Person |
+| `neue_nachrichten_abrufen()` | Gibt die Nachricht(en) zurück, die den aktuellen Routine-Lauf ausgelöst haben (jede nur einmal) |
 | `bot_status()` | Prüft nur, ob Token/Bot erreichbar sind (sendet nichts) |
 
-## Automatisches Antworten
+## Wie der Auto-Antwort-Loop funktioniert
 
-Wenn `AUTOREPLY_ENABLED=true` (Standard) läuft im selben Container ein
-Hintergrund-Loop:
+Wenn `AUTOREPLY_ENABLED=true` (Standard) läuft im Container ein
+Hintergrund-Thread:
 
 1. Fragt Telegram per Long-Polling nach neuen Nachrichten der konfigurierten
    Person (`TELEGRAM_CHAT_ID`) -- Nachrichten von anderen werden ignoriert.
 2. Kommen mehrere Nachrichten schnell hintereinander, wartet der Server
-   `AUTOREPLY_DEBOUNCE_SECONDS` auf weiteren Nachschub und bündelt alles zu
-   **einer** Anfrage an Claude -- so wird nicht auf jede einzelne Nachricht
-   separat reagiert.
-3. Schickt den gebündelten Text an die Claude-API (`CLAUDE_MODEL`, gesteuert
-   über `CLAUDE_SYSTEM_PROMPT` und `CLAUDE_EFFORT`) und schickt die Antwort
-   automatisch über den Bot zurück.
+   `AUTOREPLY_DEBOUNCE_SECONDS` auf weiteren Nachschub und bündelt alles --
+   die Routine wird dann **einmal** getriggert statt einmal pro Nachricht.
+3. Schickt einen `POST` mit `Authorization: Bearer $ROUTINE_API_KEY` an
+   `ROUTINE_TRIGGER_URL`. Kein Nachrichtentext im Request -- die Routine holt
+   sich den Text selbst per `neue_nachrichten_abrufen`.
 
 Kein Doppelt-Antworten: Telegrams `getUpdates`-Offset-Mechanismus sorgt von
-selbst dafür, dass jede Nachricht genau einmal verarbeitet wird, auch nach
-einem Neustart des Containers.
+selbst dafür, dass jede Nachricht genau einmal in den Zwischenspeicher
+wandert, auch nach einem Neustart des Containers; `neue_nachrichten_abrufen`
+liefert jede Nachricht ebenfalls nur einmal aus.
 
-**Kosten:** Jede Antwort kostet einen Claude-API-Call auf deinem
-`ANTHROPIC_API_KEY` (separates Abrechnungskonto, nicht deine
-claude.ai/Claude-Code-Nutzung). Mit `CLAUDE_MODEL`/`CLAUDE_EFFORT` lässt sich
-das steuern.
+**Kosten:** Jeder Routine-Lauf verbraucht claude.ai-Nutzung auf deinem
+Account (Cloud-Agent-Sitzung), nicht eine separate API-Rechnung.
 
 ## Lokal testen ohne Cloudflare
 
@@ -193,15 +196,21 @@ curl -H "Authorization: Bearer $MCP_AUTH_TOKEN" http://127.0.0.1:8001/healthz
 ## Troubleshooting
 
 - **Container startet nicht**: `docker compose logs` -- meist fehlt eine
-  Pflicht-Variable in `.env`.
+  Pflicht-Variable in `.env` (z.B. `ROUTINE_TRIGGER_URL`/`ROUTINE_API_KEY`
+  fehlen, obwohl `AUTOREPLY_ENABLED=true` ist).
 - **`Telegram-API-Fehler: chat not found`**: Die Zielperson hat dem Bot noch
   nie geschrieben (siehe Schritt 1.3), oder die `chat_id` ist falsch.
 - **`Telegram-API-Fehler: Unauthorized`**: `TELEGRAM_BOT_TOKEN` falsch/abgelaufen.
 - **Claude bekommt 401**: Token in Client-Konfiguration und `.env` vergleichen.
-- **Autoreply antwortet nicht**: `docker compose logs -f` prüfen -- Zeile
-  "Telegram-Autoreply-Loop gestartet" sollte beim Start erscheinen. Häufigste
-  Ursache: `ANTHROPIC_API_KEY` fehlt/falsch, oder die Zielperson hat dem Bot
-  noch nie geschrieben (siehe Schritt 1.3).
+- **Routine wird nicht getriggert**: `docker compose logs -f` prüfen -- Zeile
+  "Telegram-Autoreply-Loop gestartet" sollte beim Start erscheinen, und bei
+  neuer Nachricht "Neue Nachricht(en) erhalten, triggere Routine...". Bei
+  einem HTTP-Fehler danach: `ROUTINE_TRIGGER_URL`/`ROUTINE_API_KEY` prüfen.
+- **Routine läuft, antwortet aber nicht**: In claude.ai unter Routinen die
+  letzte Sitzung öffnen und den Verlauf prüfen -- meist fehlt der
+  Ida-Telegram-Connector bei den Konnektoren der Routine, oder
+  `neue_nachrichten_abrufen` liefert eine leere Liste (Race Condition sehr
+  unwahrscheinlich, aber möglich bei extrem kurzem `AUTOREPLY_DEBOUNCE_SECONDS`).
 - **`Conflict: terminated by other getUpdates request`**: Der Bot-Token wird
   gleichzeitig noch woanders per `getUpdates` abgefragt (oder es ist ein
   Webhook für den Bot gesetzt) -- ein Telegram-Bot-Token kann immer nur von
