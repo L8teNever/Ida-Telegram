@@ -155,6 +155,19 @@ class TelegramPoller:
         with self._voice_lock:
             return self._voice_cache.get(voice_id)
 
+    def discard_voice_audio(self, voice_id: str) -> None:
+        """Entfernt eine Sprachnachricht aus dem Zwischenspeicher -- vom
+        MCP-Tool aufgerufen, sobald sie erfolgreich transkribiert wurde.
+        Sprachdaten sollen nicht laenger vorgehalten werden als noetig
+        (Datensparsamkeit): nach der Transkription gibt es keinen Grund
+        mehr, die rohen Audiodaten im Speicher zu behalten."""
+        with self._voice_lock:
+            self._voice_cache.pop(voice_id, None)
+            try:
+                self._voice_cache_order.remove(voice_id)
+            except ValueError:
+                pass
+
     def chat_verlauf(self) -> list[dict[str, str]]:
         """Vom MCP-Tool chat_verlauf aufgerufen: nicht-destruktiver, rollierender
         Kurzverlauf der letzten chat_history_length Nachrichten (eingehend UND

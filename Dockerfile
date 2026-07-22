@@ -2,7 +2,8 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/data/hf-cache
 
 WORKDIR /app
 
@@ -19,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
-    && mkdir -p /data/whisper-models \
+    && mkdir -p /data/whisper-models /data/hf-cache \
     && chown -R appuser:appuser /app /data
 USER appuser
 

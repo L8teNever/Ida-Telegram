@@ -117,6 +117,10 @@ def sprachnachricht_transkribieren(voice_id: str) -> str:
     ist (nur die letzten paar Sprachnachrichten werden vorgehalten), oder
     das Modell noch laedt (erster Aufruf ueberhaupt kann dadurch spuerbar
     laenger dauern als spaetere).
+
+    Die rohen Audiodaten werden nach erfolgreicher Transkription sofort aus
+    dem Zwischenspeicher geloescht (Datensparsamkeit) -- derselbe voice_id
+    laesst sich danach nicht noch einmal transkribieren.
     """
     if not settings.whisper_enabled:
         raise ValueError("WHISPER_ENABLED=false -- Sprachnachrichten-Transkription ist deaktiviert.")
@@ -131,9 +135,15 @@ def sprachnachricht_transkribieren(voice_id: str) -> str:
         )
 
     try:
-        return transcribe_audio(audio, settings)
+        text = transcribe_audio(audio, settings)
     except TranscriptionError as exc:
         raise ValueError(str(exc)) from exc
+
+    # Erst NACH erfolgreicher Transkription loeschen -- bei einem Fehler
+    # bleibt die Sprachnachricht im Cache, damit ein erneuter Versuch
+    # moeglich ist, ohne sie erneut von Telegram herunterladen zu muessen.
+    poller.discard_voice_audio(voice_id)
+    return text
 
 
 @mcp.tool()
