@@ -45,6 +45,12 @@ class Settings:
     autoreply_debounce_seconds: int
     chat_history_length: int
 
+    whisper_enabled: bool
+    whisper_model: str
+    whisper_model_cache_dir: str
+    whisper_compute_type: str
+    whisper_language: str
+
 
 def load_settings() -> Settings:
     try:
@@ -72,6 +78,11 @@ def load_settings() -> Settings:
             routine_api_key=routine_api_key,
             autoreply_debounce_seconds=int(_optional("AUTOREPLY_DEBOUNCE_SECONDS", "3")),
             chat_history_length=int(_optional("CHAT_HISTORY_LENGTH", "5")),
+            whisper_enabled=_optional_bool("WHISPER_ENABLED", True),
+            whisper_model=_optional("WHISPER_MODEL", "base"),
+            whisper_model_cache_dir=_optional("WHISPER_MODEL_CACHE", "/data/whisper-models"),
+            whisper_compute_type=_optional("WHISPER_COMPUTE_TYPE", "int8"),
+            whisper_language=_optional("WHISPER_LANGUAGE", "de"),
         )
     except ConfigError as exc:
         print(f"[Ida-Telegram] Konfigurationsfehler: {exc}", file=sys.stderr)

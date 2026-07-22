@@ -159,8 +159,9 @@ custom connector -> als URL
    >
    > 4. Antworten: Kurze, freundliche, hilfreiche Antwort auf Deutsch ueber
    > `nachricht_senden`. Relevante Infos aus Schritt 2/3 einbauen, wenn sie
-   > zur Nachricht passen. Bei Sprachnachrichten kannst du den Inhalt nicht
-   > hoeren -- sag das ehrlich und bitte ggf. um eine Text-Nachricht.
+   > zur Nachricht passen. Bei Sprachnachrichten zuerst
+   > `sprachnachricht_transkribieren(voice_id)` mit der id aus
+   > `neue_nachrichten_abrufen` aufrufen, um den Inhalt zu verstehen.
    >
    > 5. Essensplan-Sonderfall: Wenn ein Foto ein Essensplan fuer die Woche
    > ist, merke dir NUR das Mittagessen pro Tag (z.B. als Entity "Essensplan
@@ -209,7 +210,8 @@ antwortet über MCP zurück auf Telegram.
 | Tool | Zweck |
 |---|---|
 | `nachricht_senden(text)` | Schickt `text` an die fest konfigurierte Person. Stoppt dabei automatisch die "tippt..."-Anzeige und trägt die Antwort in `chat_verlauf` ein |
-| `neue_nachrichten_abrufen()` | Gibt zurück, was den aktuellen Routine-Lauf ausgelöst hat (jeweils nur einmal): Text als String, Fotos als echten Bildinhalt, Bildunterschriften als eigener Text, Sprachnachrichten nur als Hinweistext (keine Transkription) |
+| `neue_nachrichten_abrufen()` | Gibt zurück, was den aktuellen Routine-Lauf ausgelöst hat (jeweils nur einmal): Text als String, Fotos als echten Bildinhalt, Bildunterschriften als eigener Text, Sprachnachrichten als Hinweistext mit `voice_id` |
+| `sprachnachricht_transkribieren(voice_id)` | Transkribiert eine zwischengespeicherte Sprachnachricht zu Text -- läuft lokal in diesem Container (faster-whisper), keine Audiodaten verlassen die eigene Infrastruktur |
 | `chat_verlauf()` | Letzte `CHAT_HISTORY_LENGTH` Nachrichten (Standard 5, beide Richtungen) als leichtgewichtiger Text -- fürs Gesprächsgedächtnis über den aktuellen Lauf hinaus. Nicht destruktiv, beliebig oft abrufbar. Fotos nur als `[Foto]`-Platzhalter, keine Bilddaten |
 | `bot_status()` | Prüft nur, ob Token/Bot erreichbar sind (sendet nichts) |
 
@@ -228,8 +230,35 @@ im separaten [Ida-Memory](https://github.com/L8teNever/Ida-Memory)-Projekt
 |---|---|
 | Text (auch formatiert, z.B. **fett**) | Wird 1:1 als Text an die Routine weitergegeben |
 | Foto | Wird heruntergeladen und als echter Bildinhalt weitergegeben -- die Routine kann es tatsächlich "sehen" (Claude-Vision über MCP-Bildinhalte) |
-| Sprachnachricht | Löst einen Trigger aus, aber **keine automatische Transkription** -- Claude hat keine native Audio-Eingabe. Die Routine bekommt nur einen Hinweis ("Sprachnachricht, X Sekunden") und sollte um eine Text-Nachricht bitten, falls nötig |
+| Sprachnachricht | Wird heruntergeladen und zwischengespeichert (Hinweis mit `voice_id`). Keine automatische Transkription -- die Routine ruft bei Bedarf gezielt `sprachnachricht_transkribieren(voice_id)` auf (lokal per Whisper, siehe unten) |
 | Sticker, Videos, Dokumente | Werden aktuell ignoriert |
+
+## Lokale Sprachnachrichten-Transkription (Whisper)
+
+`sprachnachricht_transkribieren` läuft **direkt in diesem Container** --
+kein externer Dienst, keine Audiodaten verlassen die eigene Infrastruktur.
+Technisch: [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+(CTranslate2-Engine statt des originalen openai-whisper/PyTorch-Stacks --
+deutlich schnellere und speicherschonendere CPU-Inferenz, wichtig auf einem
+VPS ohne GPU).
+
+- **Auf Abruf, nicht automatisch:** Eine Sprachnachricht wird beim Empfang
+  nur heruntergeladen und mit einer `voice_id` zwischengespeichert (die
+  letzten 20, älteste fällt raus). Transkribiert wird erst, wenn die Routine
+  das Tool tatsächlich aufruft -- spart Rechenzeit für Sprachnachrichten,
+  die z.B. gar nicht beantwortet werden.
+- **Modell wird lazy geladen:** Nicht beim Containerstart, sondern beim
+  ersten tatsächlichen Transkriptions-Aufruf -- der ist dadurch spürbar
+  langsamer (Download + Laden), jeder weitere Aufruf nutzt das bereits
+  geladene Modell und ist deutlich schneller.
+- **Ressourcen:** `WHISPER_MODEL=base` (Standard) ist ein Kompromiss aus
+  Geschwindigkeit/Genauigkeit für eine CPU-VPS ohne GPU. Bei sehr
+  begrenztem RAM `tiny` probieren, bei Bedarf an Genauigkeit `small`. Das
+  Modell wird nach dem ersten Download im `/data`-Volume gecacht.
+- **Bekanntes Whisper-Verhalten:** Auf sehr kurzen/leisen/inhaltsleeren
+  Aufnahmen "halluziniert" das Modell manchmal plausibel klingenden, aber
+  falschen Text (ein dokumentiertes Verhalten aller Whisper-Modelle, kein
+  Bug dieses Servers) -- bei zweifelhaften Ergebnissen im Zweifel nachfragen.
 
 ## Wie der Auto-Antwort-Loop funktioniert
 
@@ -285,3 +314,13 @@ curl -H "Authorization: Bearer $MCP_AUTH_TOKEN" http://127.0.0.1:4567/healthz
   gleichzeitig noch woanders per `getUpdates` abgefragt (oder es ist ein
   Webhook für den Bot gesetzt) -- ein Telegram-Bot-Token kann immer nur von
   einem Prozess gleichzeitig per Long-Polling abgefragt werden.
+- **`sprachnachricht_transkribieren` dauert beim ersten Aufruf sehr lange**:
+  normal -- das Modell wird dann erst heruntergeladen/geladen. Danach
+  deutlich schneller. Bei dauerhaft sehr langsamer Transkription ein
+  kleineres `WHISPER_MODEL` (z.B. `tiny`) probieren.
+- **"Keine zwischengespeicherte Sprachnachricht ... gefunden"**: entweder
+  eine falsche/erfundene `voice_id`, oder es sind seither mehr als 20 neue
+  Sprachnachrichten eingegangen (älteste fallen aus dem Zwischenspeicher).
+- **Container braucht spürbar mehr RAM als vorher**: durch
+  `faster-whisper` + geladenes Modell erwartet -- bei sehr begrenztem RAM
+  `WHISPER_MODEL=tiny` setzen oder `WHISPER_ENABLED=false`.

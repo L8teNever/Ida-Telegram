@@ -29,7 +29,8 @@ from starlette.responses import JSONResponse
 from app.auth import BearerAuthMiddleware
 from app.config import load_settings
 from app.telegram_client import TelegramClient
-from app.telegram_poller import TelegramPoller, start_background
+from app.telegram_poller import TelegramPoller, _entry_text, start_background
+from app.transcription import TranscriptionError, transcribe_audio
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -46,9 +47,10 @@ mcp = FastMCP(
         "Werkzeuge fuer die eine fest konfigurierte Person: "
         "neue_nachrichten_abrufen liest, was sie gerade geschrieben hat -- "
         "inklusive Fotos als echte Bildinhalte, die direkt angeschaut werden "
-        "koennen. Sprachnachrichten werden erkannt, aber nicht transkribiert "
-        "(kein Audio-Verstaendnis verfuegbar) -- das steht dann als Hinweistext "
-        "dabei. chat_verlauf liefert zusaetzlich die letzten paar Nachrichten "
+        "koennen. Sprachnachrichten kommen als Hinweistext mit einer voice_id "
+        "-- mit sprachnachricht_transkribieren(voice_id) den Inhalt lokal "
+        "transkribieren lassen, dann normal darauf antworten. "
+        "chat_verlauf liefert zusaetzlich die letzten paar Nachrichten "
         "(beide Richtungen, nur als Text, beliebig oft abrufbar) fuer "
         "Gespraechskontext -- Fotos darin nur als Platzhalter, echte Bilder "
         "gibt es ausschliesslich einmalig ueber neue_nachrichten_abrufen. "
@@ -79,8 +81,9 @@ def nachricht_senden(text: str) -> dict:
 def neue_nachrichten_abrufen() -> list:
     """Gibt zurueck, was diesen Lauf ausgeloest hat: Text als String, Fotos als
     echten Bildinhalt (direkt anschaubar), Bildunterschriften als eigener
-    Text danach. Sprachnachrichten liefern nur einen Hinweistext (Dauer),
-    keine automatische Transkription -- der Inhalt ist nicht bekannt.
+    Text danach. Sprachnachrichten liefern einen Hinweistext mit einer
+    voice_id -- mit sprachnachricht_transkribieren(voice_id) den Inhalt
+    abrufen.
 
     Jeder Eintrag wird nur einmal ausgeliefert (Zwischenspeicher wird beim
     Abrufen geleert). Leere Liste, wenn AUTOREPLY_ENABLED=false ist oder
@@ -97,7 +100,40 @@ def neue_nachrichten_abrufen() -> list:
             content.append(Image(data=entry["data"], format="jpeg"))
             if entry.get("caption"):
                 content.append(f"Bildunterschrift: {entry['caption']}")
+        elif entry["kind"] == "voice":
+            content.append(_entry_text(entry))
     return content
+
+
+@mcp.tool()
+def sprachnachricht_transkribieren(voice_id: str) -> str:
+    """Transkribiert eine zwischengespeicherte Sprachnachricht zu Text --
+    laeuft lokal in diesem Container (faster-whisper), keine Audiodaten
+    verlassen die eigene Infrastruktur.
+
+    voice_id: aus dem Hinweistext von neue_nachrichten_abrufen() (z.B.
+    "[Sprachnachricht, 12s -- zum Verstehen sprachnachricht_transkribieren(...)]").
+    Schlaegt fehl, wenn WHISPER_ENABLED=false ist, die id unbekannt/zu alt
+    ist (nur die letzten paar Sprachnachrichten werden vorgehalten), oder
+    das Modell noch laedt (erster Aufruf ueberhaupt kann dadurch spuerbar
+    laenger dauern als spaetere).
+    """
+    if not settings.whisper_enabled:
+        raise ValueError("WHISPER_ENABLED=false -- Sprachnachrichten-Transkription ist deaktiviert.")
+    if poller is None:
+        raise ValueError("AUTOREPLY_ENABLED=false -- keine Sprachnachrichten verfuegbar.")
+
+    audio = poller.get_voice_audio(voice_id)
+    if audio is None:
+        raise ValueError(
+            f"Keine zwischengespeicherte Sprachnachricht mit voice_id={voice_id!r} gefunden "
+            "(unbekannt oder schon zu lange her -- nur die letzten paar werden vorgehalten)."
+        )
+
+    try:
+        return transcribe_audio(audio, settings)
+    except TranscriptionError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 @mcp.tool()

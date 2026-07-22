@@ -6,14 +6,24 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# ffmpeg: Sicherheitsnetz fuer die Audio-Dekodierung (faster-whisper bringt
+# ueber sein av-Abhaengigkeit i.d.R. schon eigene Decoder mit, aber ein
+# System-ffmpeg zusaetzlich kostet nur ein paar MB und beseitigt jedes
+# Format-Risiko fuer Telegrams OGG/Opus-Sprachnachrichten).
+RUN apt-get update && apt-get install --no-install-recommends -y ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
-    && chown -R appuser:appuser /app
+    && mkdir -p /data/whisper-models \
+    && chown -R appuser:appuser /app /data
 USER appuser
+
+VOLUME ["/data"]
 
 EXPOSE 4567
 

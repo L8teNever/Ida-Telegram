@@ -4,13 +4,13 @@ services:
     container_name: ida-telegram-mcp
     restart: unless-stopped
 
-    # Nur auf localhost binden: von aussen ist der Port NICHT erreichbar,
-    # nur der auf demselben Server laufende cloudflared-Tunnel kann ihn
-    # ansprechen. Absicherung nach aussen passiert zusaetzlich per Token
-    # (siehe MCP_AUTH_TOKEN) direkt in der Anwendung. Standardport 4567,
-    # damit es neben Ida-Untis (8000) auf demselben Server laufen kann.
+    # Bind-IP 10.7.0.1 (nicht 127.0.0.1): nur so kann der auf diesem Host
+    # separat laufende cloudflared-Container den Port erreichen -- passend
+    # zum bestehenden Netzwerk-Setup (siehe auch Ida-Google/Ida-Untis).
+    # Standardport 4567, damit es neben Ida-Untis (8000) auf demselben
+    # Server laufen kann.
     ports:
-      - "127.0.0.1:${MCP_PORT:-4567}:4567"
+      - "10.7.0.1:${MCP_PORT:-4567}:4567"
 
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Bitte TELEGRAM_BOT_TOKEN in .env setzen}
@@ -25,6 +25,17 @@ services:
       ROUTINE_API_KEY: ${ROUTINE_API_KEY:-}
       AUTOREPLY_DEBOUNCE_SECONDS: ${AUTOREPLY_DEBOUNCE_SECONDS:-3}
       CHAT_HISTORY_LENGTH: ${CHAT_HISTORY_LENGTH:-5}
+      # Lokale Sprachnachrichten-Transkription (faster-whisper, laeuft in
+      # diesem Container). WHISPER_MODEL: tiny/base/small/medium/large-v3 --
+      # groesser = genauer, aber langsamer/mehr RAM auf einer CPU-VPS.
+      WHISPER_ENABLED: ${WHISPER_ENABLED:-true}
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_MODEL_CACHE: /data/whisper-models
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-de}
+
+    volumes:
+      - ida-telegram-whisper-models:/data
 
     healthcheck:
       test:
@@ -41,7 +52,8 @@ services:
 
     # Sicherheits-Haertung: kein root im Container (siehe Dockerfile),
     # keine neuen Privilegien, alle Linux-Capabilities entfernt, Dateisystem
-    # read-only (nur /tmp beschreibbar fuer temporaere Dateien).
+    # read-only (nur /tmp beschreibbar fuer temporaere Dateien, /data ueber
+    # das benannte Volume fuer den dauerhaften Whisper-Modell-Cache).
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -55,3 +67,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  ida-telegram-whisper-models:

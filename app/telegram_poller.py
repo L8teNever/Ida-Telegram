@@ -8,9 +8,10 @@ zwischengespeichert, bis die Routine sie abholt.
 Unterstuetzt Text (jede Formatierung -- Telegram liefert reinen Text ohne
 Markup, Formatierung aendert daran nichts), Fotos (werden heruntergeladen und
 als echtes Bild an neue_nachrichten_abrufen weitergegeben, die Routine kann
-sie also wirklich "sehen") und Sprachnachrichten (werden erkannt und lösen
-einen Trigger aus, aber NICHT automatisch transkribiert -- Claude hat keine
-native Audio-Eingabe, dafuer waere ein separater Speech-to-Text-Dienst noetig).
+sie also wirklich "sehen") und Sprachnachrichten (werden heruntergeladen und
+zwischengespeichert -- Transkription passiert NICHT automatisch, sondern nur
+auf gezielten Abruf ueber das Tool sprachnachricht_transkribieren mit der
+voice_id aus dem Hinweistext, siehe app/transcription.py).
 
 Nutzt Telegram long-polling (getUpdates) statt eines Webhooks: kein neuer
 oeffentlicher Endpunkt noetig -- der Container macht nur ausgehende HTTPS-
@@ -49,6 +50,7 @@ unnoetig viele Tokens fuer laengst gesehene Bilder verbrauchen.
 from __future__ import annotations
 
 import logging
+import secrets
 import threading
 import time
 from collections import deque
@@ -62,6 +64,11 @@ from app.telegram_client import TelegramClient
 log = logging.getLogger("ida-telegram.autoreply")
 
 _HISTORY_TEXT_MAX_LENGTH = 500
+# Wie viele heruntergeladene, noch nicht transkribierte Sprachnachrichten
+# maximal im Speicher gehalten werden -- danach faellt die aelteste raus
+# (FIFO), damit der Speicherverbrauch begrenzt bleibt, falls Sprachnachrichten
+# nie abgerufen/transkribiert werden.
+_VOICE_CACHE_MAX_ENTRIES = 20
 
 _TELEGRAM_API_BASE = "https://api.telegram.org"
 _TELEGRAM_FILE_BASE = "https://api.telegram.org/file"
@@ -89,9 +96,19 @@ _ROUTINE_TEXT_MAX_LENGTH = 65536
 def _entry_text(entry: dict[str, Any]) -> str:
     """Text-Darstellung eines einzelnen Eintrags -- fuer den Routine-Trigger-Text
     und den rollierenden chat_verlauf. Fotos nur als Platzhalter, nie als
-    Bilddaten (die gibt es weiterhin nur einmalig ueber neue_nachrichten_abrufen)."""
+    Bilddaten (die gibt es weiterhin nur einmalig ueber neue_nachrichten_abrufen).
+    Sprachnachrichten aehnlich nur als Hinweis mit voice_id -- die eigentliche
+    Transkription passiert erst auf gezielten Tool-Aufruf, nicht automatisch."""
     if entry["kind"] == "photo":
         return f"[Foto]{' ' + entry['caption'] if entry.get('caption') else ''}"
+    if entry["kind"] == "voice":
+        hinweis = (
+            f'[Sprachnachricht, {entry["duration"]}s -- zum Verstehen '
+            f'sprachnachricht_transkribieren(voice_id="{entry["voice_id"]}") aufrufen]'
+        )
+        if entry.get("caption"):
+            hinweis += f" Bildunterschrift: {entry['caption']}"
+        return hinweis
     return entry["text"]
 
 
@@ -116,6 +133,27 @@ class TelegramPoller:
 
         self._history_lock = threading.Lock()
         self._history: deque[dict[str, str]] = deque(maxlen=settings.chat_history_length)
+
+        self._voice_lock = threading.Lock()
+        self._voice_cache: dict[str, bytes] = {}
+        self._voice_cache_order: deque[str] = deque()
+
+    def _cache_voice(self, data: bytes) -> str:
+        voice_id = f"voice_{secrets.token_hex(6)}"
+        with self._voice_lock:
+            if len(self._voice_cache) >= _VOICE_CACHE_MAX_ENTRIES:
+                aeltester = self._voice_cache_order.popleft()
+                self._voice_cache.pop(aeltester, None)
+            self._voice_cache_order.append(voice_id)
+            self._voice_cache[voice_id] = data
+        return voice_id
+
+    def get_voice_audio(self, voice_id: str) -> bytes | None:
+        """Vom MCP-Tool sprachnachricht_transkribieren aufgerufen: liefert die
+        rohen Audiodaten zu einer per _cache_voice() zwischengespeicherten
+        Sprachnachricht, oder None, wenn die id unbekannt/zu alt ist."""
+        with self._voice_lock:
+            return self._voice_cache.get(voice_id)
 
     def chat_verlauf(self) -> list[dict[str, str]]:
         """Vom MCP-Tool chat_verlauf aufgerufen: nicht-destruktiver, rollierender
@@ -235,14 +273,18 @@ class TelegramPoller:
                     entries.append({"kind": "text", "text": hinweis})
             elif voice:
                 duration = voice.get("duration", 0)
-                hinweis = (
-                    f"[Sprachnachricht erhalten, {duration}s -- automatische "
-                    "Transkription ist nicht eingerichtet, der Inhalt ist "
-                    "nicht bekannt]"
-                )
-                if caption:
-                    hinweis += f" Bildunterschrift: {caption}"
-                entries.append({"kind": "text", "text": hinweis})
+                try:
+                    data = self._download_file(voice["file_id"])
+                    voice_id = self._cache_voice(data)
+                    entries.append(
+                        {"kind": "voice", "voice_id": voice_id, "duration": duration, "caption": caption}
+                    )
+                except Exception:
+                    log.exception("Sprachnachricht-Download fehlgeschlagen")
+                    hinweis = "[Sprachnachricht konnte nicht heruntergeladen werden]"
+                    if caption:
+                        hinweis += f" Bildunterschrift: {caption}"
+                    entries.append({"kind": "text", "text": hinweis})
             # Andere Typen (Sticker, Dokumente, Videos, ...) werden aktuell
             # ignoriert.
         return entries
