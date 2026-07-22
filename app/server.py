@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 from starlette.responses import JSONResponse
 
 from app.auth import BearerAuthMiddleware
@@ -40,10 +40,13 @@ mcp = FastMCP(
     "Ida-Telegram",
     instructions=(
         "Zwei Werkzeuge fuer die eine fest konfigurierte Person: "
-        "neue_nachrichten_abrufen liest, was sie gerade geschrieben hat, "
-        "nachricht_senden schickt eine Antwort. Es gibt keinen Empfaenger-"
-        "Parameter -- beide Tools betreffen immer nur die in TELEGRAM_CHAT_ID "
-        "hinterlegte Person."
+        "neue_nachrichten_abrufen liest, was sie gerade geschrieben hat -- "
+        "inklusive Fotos als echte Bildinhalte, die direkt angeschaut werden "
+        "koennen. Sprachnachrichten werden erkannt, aber nicht transkribiert "
+        "(kein Audio-Verstaendnis verfuegbar) -- das steht dann als Hinweistext "
+        "dabei. nachricht_senden schickt eine Antwort. Es gibt keinen "
+        "Empfaenger-Parameter -- beide Tools betreffen immer nur die in "
+        "TELEGRAM_CHAT_ID hinterlegte Person."
     ),
     host=settings.mcp_host,
     port=settings.mcp_port,
@@ -61,16 +64,28 @@ def nachricht_senden(text: str) -> dict:
 
 
 @mcp.tool()
-def neue_nachrichten_abrufen() -> dict:
-    """Gibt die Telegram-Nachricht(en) zurueck, die diesen Lauf ausgeloest haben.
+def neue_nachrichten_abrufen() -> list:
+    """Gibt zurueck, was diesen Lauf ausgeloest hat: Text als String, Fotos als
+    echten Bildinhalt (direkt anschaubar), Bildunterschriften als eigener
+    Text danach. Sprachnachrichten liefern nur einen Hinweistext (Dauer),
+    keine automatische Transkription -- der Inhalt ist nicht bekannt.
 
-    Jede Nachricht wird nur einmal ausgeliefert (Zwischenspeicher wird beim
+    Jeder Eintrag wird nur einmal ausgeliefert (Zwischenspeicher wird beim
     Abrufen geleert). Leere Liste, wenn AUTOREPLY_ENABLED=false ist oder
-    gerade keine neue Nachricht ansteht.
+    gerade nichts Neues ansteht.
     """
     if poller is None:
-        return {"nachrichten": []}
-    return {"nachrichten": poller.pending_messages()}
+        return []
+
+    content: list = []
+    for entry in poller.pending_entries():
+        if entry["kind"] == "text":
+            content.append(entry["text"])
+        elif entry["kind"] == "photo":
+            content.append(Image(data=entry["data"], format="jpeg"))
+            if entry.get("caption"):
+                content.append(f"Bildunterschrift: {entry['caption']}")
+    return content
 
 
 @mcp.tool()

@@ -5,10 +5,12 @@ Ida-Untis und ohne Verbindung dazu. Zwei Dinge in einem Container:
 
 1. Zwei MCP-Werkzeuge für Claude: einer fest konfigurierten Person eine
    Telegram-Nachricht schicken (`nachricht_senden`), und lesen, was sie
-   gerade geschrieben hat (`neue_nachrichten_abrufen`).
-2. Ein Hintergrund-Loop, der neue Telegram-Nachrichten erkennt und dafür
-   eine **claude.ai Routine** triggert -- die Routine liest die Nachricht
-   dann selbst über die MCP-Tools oben und antwortet.
+   gerade geschrieben hat (`neue_nachrichten_abrufen`) -- Fotos kommen dabei
+   als echter Bildinhalt mit, den die Routine wirklich "sehen" kann.
+2. Ein Hintergrund-Loop, der neue Telegram-Nachrichten erkennt (Text, Fotos,
+   Sprachnachrichten) und dafür eine **claude.ai Routine** triggert -- die
+   Routine liest die Nachricht dann selbst über die MCP-Tools oben und
+   antwortet.
 
 Läuft als Docker-Container und wird über einen bestehenden Cloudflare
 Tunnel unter einer eigenen Domain erreichbar gemacht.
@@ -134,9 +136,13 @@ custom connector -> als URL
 3. **Anweisungen:**
    > Du bist der Telegram-Assistent. Ruf ueber den Ida-Telegram-Connector das
    > Tool `neue_nachrichten_abrufen` auf, um zu sehen, was gerade geschrieben
-   > wurde. Antworte darauf kurz, freundlich und hilfreich auf Deutsch, indem
-   > du das Tool `nachricht_senden` verwendest. Wenn `neue_nachrichten_abrufen`
-   > keine Nachrichten liefert, mach nichts.
+   > wurde -- das koennen Text, Fotos (die du dir direkt anschauen kannst)
+   > oder Hinweise auf Sprachnachrichten sein. Antworte darauf kurz,
+   > freundlich und hilfreich auf Deutsch, indem du das Tool
+   > `nachricht_senden` verwendest. Bei Sprachnachrichten kannst du den
+   > Inhalt nicht hoeren -- sag das ehrlich und bitte ggf. um eine
+   > Text-Nachricht. Wenn `neue_nachrichten_abrufen` nichts liefert, mach
+   > nichts.
 4. **Trigger:** "API" auswählen (nicht Zeitplan). claude.ai zeigt dir danach
    einmalig einen **API-Token** an (`sk-ant-oat01-...`) -- sofort notieren,
    er wird danach nicht mehr im Klartext angezeigt.
@@ -169,8 +175,17 @@ antwortet über MCP zurück auf Telegram.
 | Tool | Zweck |
 |---|---|
 | `nachricht_senden(text)` | Schickt `text` an die fest konfigurierte Person |
-| `neue_nachrichten_abrufen()` | Gibt die Nachricht(en) zurück, die den aktuellen Routine-Lauf ausgelöst haben (jede nur einmal) |
+| `neue_nachrichten_abrufen()` | Gibt zurück, was den aktuellen Routine-Lauf ausgelöst hat (jeweils nur einmal): Text als String, Fotos als echten Bildinhalt, Bildunterschriften als eigener Text, Sprachnachrichten nur als Hinweistext (keine Transkription) |
 | `bot_status()` | Prüft nur, ob Token/Bot erreichbar sind (sendet nichts) |
+
+**Unterstützte Nachrichtentypen:**
+
+| Typ | Verhalten |
+|---|---|
+| Text (auch formatiert, z.B. **fett**) | Wird 1:1 als Text an die Routine weitergegeben |
+| Foto | Wird heruntergeladen und als echter Bildinhalt weitergegeben -- die Routine kann es tatsächlich "sehen" (Claude-Vision über MCP-Bildinhalte) |
+| Sprachnachricht | Löst einen Trigger aus, aber **keine automatische Transkription** -- Claude hat keine native Audio-Eingabe. Die Routine bekommt nur einen Hinweis ("Sprachnachricht, X Sekunden") und sollte um eine Text-Nachricht bitten, falls nötig |
+| Sticker, Videos, Dokumente | Werden aktuell ignoriert |
 
 ## Wie der Auto-Antwort-Loop funktioniert
 
