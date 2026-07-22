@@ -84,7 +84,7 @@ cp .env.example .env
 ```
 
 `.env` erstmal mit `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` und
-`MCP_AUTH_TOKEN` ausfüllen (siehe Tabelle unten) -- `ROUTINE_TRIGGER_URL`
+`MCP_AUTH_TOKEN` ausfüllen (siehe Tabelle unten) -- `ROUTINE_ID`
 und `ROUTINE_API_KEY` folgen in Schritt 5, dafür muss der Server erst
 erreichbar sein.
 
@@ -102,7 +102,7 @@ docker compose logs -f
 ```
 
 (Mit `AUTOREPLY_ENABLED=true` als Standard startet der Container zunächst
-mit Fehler, weil `ROUTINE_TRIGGER_URL`/`ROUTINE_API_KEY` noch fehlen --
+mit Fehler, weil `ROUTINE_ID`/`ROUTINE_API_KEY` noch fehlen --
 das ist normal, kommt in Schritt 5. Alternativ jetzt schon `AUTOREPLY_ENABLED=false`
 setzen und später wieder auf `true`.)
 
@@ -138,17 +138,25 @@ custom connector -> als URL
    > du das Tool `nachricht_senden` verwendest. Wenn `neue_nachrichten_abrufen`
    > keine Nachrichten liefert, mach nichts.
 4. **Trigger:** "API" auswählen (nicht Zeitplan). claude.ai zeigt dir danach
-   eine **Trigger-URL** und einen **API-Token** an -- beide einmalig
-   notieren, der Token wird danach nicht mehr im Klartext angezeigt.
+   einmalig einen **API-Token** an (`sk-ant-oat01-...`) -- sofort notieren,
+   er wird danach nicht mehr im Klartext angezeigt.
 5. Bei **Konnektoren** den gerade hinzugefügten `Ida-Telegram`-Connector
    auswählen.
 6. Routine speichern.
-7. Die notierten Werte in `.env` eintragen:
+7. Die Routine-ID aus der URL ablesen, die claude.ai beim Bearbeiten der
+   Routine anzeigt (`claude.ai/code/routines/trig_...` -- der Teil ab `trig_`
+   ist die ID), und zusammen mit dem Token in `.env` eintragen:
 
 ```bash
-ROUTINE_TRIGGER_URL=<die-angezeigte-trigger-url>
-ROUTINE_API_KEY=<der-angezeigte-api-token>
+ROUTINE_ID=<trig_...>
+ROUTINE_API_KEY=<der-notierte-api-token>
 ```
+
+Technischer Hintergrund: der Server ruft dafür
+`POST https://api.anthropic.com/v1/claude_code/routines/<ROUTINE_ID>/fire`
+auf (offizieller Endpunkt für Routinen-Trigger, siehe
+[Doku](https://platform.claude.com/docs/en/api/claude-code/routines-fire)) --
+`ROUTINE_ID` und `ROUTINE_API_KEY` sind alles, was dafür gebraucht wird.
 
 8. Neu starten: `docker compose up -d`
 
@@ -174,9 +182,11 @@ Hintergrund-Thread:
 2. Kommen mehrere Nachrichten schnell hintereinander, wartet der Server
    `AUTOREPLY_DEBOUNCE_SECONDS` auf weiteren Nachschub und bündelt alles --
    die Routine wird dann **einmal** getriggert statt einmal pro Nachricht.
-3. Schickt einen `POST` mit `Authorization: Bearer $ROUTINE_API_KEY` an
-   `ROUTINE_TRIGGER_URL`. Kein Nachrichtentext im Request -- die Routine holt
-   sich den Text selbst per `neue_nachrichten_abrufen`.
+3. Schickt einen `POST` mit `Authorization: Bearer $ROUTINE_API_KEY` an den
+   Routinen-Endpunkt (`ROUTINE_ID` in der URL) -- der gebündelte Text geht als
+   `text`-Feld direkt mit (sofortiger Kontext für die Routine), zusätzlich
+   liefert `neue_nachrichten_abrufen` denselben Text noch einmal ab, falls
+   die Routine ihn lieber über MCP nachlesen will.
 
 Kein Doppelt-Antworten: Telegrams `getUpdates`-Offset-Mechanismus sorgt von
 selbst dafür, dass jede Nachricht genau einmal in den Zwischenspeicher
@@ -196,7 +206,7 @@ curl -H "Authorization: Bearer $MCP_AUTH_TOKEN" http://127.0.0.1:8001/healthz
 ## Troubleshooting
 
 - **Container startet nicht**: `docker compose logs` -- meist fehlt eine
-  Pflicht-Variable in `.env` (z.B. `ROUTINE_TRIGGER_URL`/`ROUTINE_API_KEY`
+  Pflicht-Variable in `.env` (z.B. `ROUTINE_ID`/`ROUTINE_API_KEY`
   fehlen, obwohl `AUTOREPLY_ENABLED=true` ist).
 - **`Telegram-API-Fehler: chat not found`**: Die Zielperson hat dem Bot noch
   nie geschrieben (siehe Schritt 1.3), oder die `chat_id` ist falsch.
@@ -205,7 +215,8 @@ curl -H "Authorization: Bearer $MCP_AUTH_TOKEN" http://127.0.0.1:8001/healthz
 - **Routine wird nicht getriggert**: `docker compose logs -f` prüfen -- Zeile
   "Telegram-Autoreply-Loop gestartet" sollte beim Start erscheinen, und bei
   neuer Nachricht "Neue Nachricht(en) erhalten, triggere Routine...". Bei
-  einem HTTP-Fehler danach: `ROUTINE_TRIGGER_URL`/`ROUTINE_API_KEY` prüfen.
+  einem HTTP-Fehler danach: `ROUTINE_ID`/`ROUTINE_API_KEY` prüfen (401 =
+  Token falsch/gehört nicht zu dieser Routine, 404 = `ROUTINE_ID` falsch).
 - **Routine läuft, antwortet aber nicht**: In claude.ai unter Routinen die
   letzte Sitzung öffnen und den Verlauf prüfen -- meist fehlt der
   Ida-Telegram-Connector bei den Konnektoren der Routine, oder

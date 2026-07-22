@@ -40,7 +40,7 @@ class Settings:
     mcp_port: int
 
     autoreply_enabled: bool
-    routine_trigger_url: str
+    routine_id: str
     routine_api_key: str
     autoreply_debounce_seconds: int
 
@@ -55,9 +55,7 @@ def load_settings() -> Settings:
             )
 
         autoreply_enabled = _optional_bool("AUTOREPLY_ENABLED", True)
-        routine_trigger_url = (
-            _require("ROUTINE_TRIGGER_URL") if autoreply_enabled else _optional("ROUTINE_TRIGGER_URL", "")
-        )
+        routine_id = _require("ROUTINE_ID") if autoreply_enabled else _optional("ROUTINE_ID", "")
         routine_api_key = (
             _require("ROUTINE_API_KEY") if autoreply_enabled else _optional("ROUTINE_API_KEY", "")
         )
@@ -69,7 +67,7 @@ def load_settings() -> Settings:
             mcp_host=_optional("MCP_HOST", "0.0.0.0"),
             mcp_port=int(_optional("MCP_PORT", "8001")),
             autoreply_enabled=autoreply_enabled,
-            routine_trigger_url=routine_trigger_url,
+            routine_id=routine_id,
             routine_api_key=routine_api_key,
             autoreply_debounce_seconds=int(_optional("AUTOREPLY_DEBOUNCE_SECONDS", "3")),
         )

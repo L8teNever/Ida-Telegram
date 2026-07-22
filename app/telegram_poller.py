@@ -31,10 +31,16 @@ from app.telegram_client import TelegramClient
 
 log = logging.getLogger("ida-telegram.autoreply")
 
-_API_BASE = "https://api.telegram.org"
+_TELEGRAM_API_BASE = "https://api.telegram.org"
 _LONG_POLL_TIMEOUT = 30
 _ERROR_BACKOFF_SECONDS = 5
 _TRIGGER_TIMEOUT_SECONDS = 15
+
+# https://platform.claude.com/docs/en/api/claude-code/routines-fire
+_ROUTINE_FIRE_URL = "https://api.anthropic.com/v1/claude_code/routines/{routine_id}/fire"
+_ROUTINE_BETA_HEADER = "experimental-cc-routine-2026-04-01"
+_ANTHROPIC_VERSION = "2023-06-01"
+_ROUTINE_TEXT_MAX_LENGTH = 65536
 
 
 class TelegramPoller:
@@ -56,7 +62,7 @@ class TelegramPoller:
             return messages
 
     def _get_updates(self, timeout: int) -> list[dict]:
-        url = f"{_API_BASE}/bot{self._settings.telegram_bot_token}/getUpdates"
+        url = f"{_TELEGRAM_API_BASE}/bot{self._settings.telegram_bot_token}/getUpdates"
         response = requests.get(
             url,
             params={"offset": self._offset, "timeout": timeout, "allowed_updates": ["message"]},
@@ -95,11 +101,18 @@ class TelegramPoller:
             buffer.extend(more_texts)
         return buffer
 
-    def _trigger_routine(self) -> None:
+    def _trigger_routine(self, text: str) -> None:
+        url = _ROUTINE_FIRE_URL.format(routine_id=self._settings.routine_id)
         try:
             response = requests.post(
-                self._settings.routine_trigger_url,
-                headers={"Authorization": f"Bearer {self._settings.routine_api_key}"},
+                url,
+                headers={
+                    "Authorization": f"Bearer {self._settings.routine_api_key}",
+                    "anthropic-beta": _ROUTINE_BETA_HEADER,
+                    "anthropic-version": _ANTHROPIC_VERSION,
+                    "Content-Type": "application/json",
+                },
+                json={"text": text[:_ROUTINE_TEXT_MAX_LENGTH]},
                 timeout=_TRIGGER_TIMEOUT_SECONDS,
             )
             if response.status_code >= 300:
@@ -128,7 +141,10 @@ class TelegramPoller:
                     self._pending_messages.extend(batch)
 
                 log.info("Neue Nachricht(en) erhalten, triggere Routine...")
-                self._trigger_routine()
+                # "text" wird zusaetzlich zum Puffer mitgeschickt -- gibt der
+                # Routine sofortigen Kontext, ohne dass sie zwingend erst
+                # neue_nachrichten_abrufen aufrufen muss.
+                self._trigger_routine("\n".join(batch))
             except Exception:
                 log.exception("Fehler im Telegram-Poll-Loop, versuche es weiter")
                 time.sleep(_ERROR_BACKOFF_SECONDS)
