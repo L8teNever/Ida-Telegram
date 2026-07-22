@@ -43,6 +43,7 @@ class Settings:
     routine_id: str
     routine_api_key: str
     autoreply_debounce_seconds: int
+    chat_history_length: int
 
 
 def load_settings() -> Settings:
@@ -70,6 +71,7 @@ def load_settings() -> Settings:
             routine_id=routine_id,
             routine_api_key=routine_api_key,
             autoreply_debounce_seconds=int(_optional("AUTOREPLY_DEBOUNCE_SECONDS", "3")),
+            chat_history_length=int(_optional("CHAT_HISTORY_LENGTH", "5")),
         )
     except ConfigError as exc:
         print(f"[Ida-Telegram] Konfigurationsfehler: {exc}", file=sys.stderr)

@@ -48,8 +48,12 @@ mcp = FastMCP(
         "inklusive Fotos als echte Bildinhalte, die direkt angeschaut werden "
         "koennen. Sprachnachrichten werden erkannt, aber nicht transkribiert "
         "(kein Audio-Verstaendnis verfuegbar) -- das steht dann als Hinweistext "
-        "dabei. nachricht_senden schickt eine Antwort. Es gibt keinen "
-        "Empfaenger-Parameter -- beide Tools betreffen immer nur die in "
+        "dabei. chat_verlauf liefert zusaetzlich die letzten paar Nachrichten "
+        "(beide Richtungen, nur als Text, beliebig oft abrufbar) fuer "
+        "Gespraechskontext -- Fotos darin nur als Platzhalter, echte Bilder "
+        "gibt es ausschliesslich einmalig ueber neue_nachrichten_abrufen. "
+        "nachricht_senden schickt eine Antwort. Es gibt keinen "
+        "Empfaenger-Parameter -- alle Tools betreffen immer nur die in "
         "TELEGRAM_CHAT_ID hinterlegte Person."
     ),
     host=settings.mcp_host,
@@ -67,6 +71,7 @@ def nachricht_senden(text: str) -> dict:
     result = client.send_message(text)
     if poller is not None:
         poller.notify_reply_sent()
+        poller.record_outgoing(text)
     return result
 
 
@@ -93,6 +98,26 @@ def neue_nachrichten_abrufen() -> list:
             if entry.get("caption"):
                 content.append(f"Bildunterschrift: {entry['caption']}")
     return content
+
+
+@mcp.tool()
+def chat_verlauf() -> list[dict]:
+    """Gibt die letzten CHAT_HISTORY_LENGTH Nachrichten zurueck (Standard 5),
+    eingehend UND ausgehend, als leichtgewichtige Text-Zusammenfassung --
+    fuer zusaetzlichen Gespraechskontext, unabhaengig davon, was diesen Lauf
+    ausgeloest hat.
+
+    Jeder Eintrag: {"richtung": "eingehend"|"ausgehend", "text": str}. Fotos
+    stehen hier nur als Platzhalter ("[Foto]"), nicht als echte Bilddaten --
+    die liefert ausschliesslich neue_nachrichten_abrufen, sonst wuerde jeder
+    Aufruf unnoetig Tokens fuer laengst gesehene Bilder verbrauchen. Anders
+    als neue_nachrichten_abrufen NICHT destruktiv -- beliebig oft abrufbar,
+    liefert immer den aktuellen Kurzverlauf. Leere Liste, wenn
+    AUTOREPLY_ENABLED=false ist.
+    """
+    if poller is None:
+        return []
+    return poller.chat_verlauf()
 
 
 @mcp.tool()

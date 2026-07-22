@@ -32,6 +32,18 @@ er alle _TYPING_REPEAT_SECONDS (< 5s) ohne Pause neu gesendet -- eine Pause
 wuerde die Anzeige sichtbar verschwinden lassen. app/server.py ruft beim
 tatsaechlichen Versand (nachricht_senden) notify_reply_sent() auf, das
 stoppt die Schleife sofort.
+
+Zusaetzlich zu neue_nachrichten_abrufen (liefert jeden Eintrag nur EINMAL,
+das loest den Routine-Trigger aus) haelt der Poller einen rollierenden
+Kurzverlauf der letzten CHAT_HISTORY_LENGTH Nachrichten -- eingehend UND
+ausgehend, ueber das Tool chat_verlauf beliebig oft abrufbar (nicht
+destruktiv). Telegrams Bot-API selbst bietet keine Moeglichkeit, alte
+Nachrichten nachtraeglich abzufragen (kein "getChatHistory" fuer Bots) --
+deshalb wird der Verlauf hier selbst mitgeschrieben, sobald Nachrichten den
+Server durchlaufen. Fotos stehen dort nur als Platzhaltertext (z.B.
+"[Foto]"), nicht als echte Bilddaten -- die gibt es weiterhin nur einmalig
+ueber neue_nachrichten_abrufen, sonst wuerde jeder chat_verlauf-Aufruf
+unnoetig viele Tokens fuer laengst gesehene Bilder verbrauchen.
 """
 
 from __future__ import annotations
@@ -39,6 +51,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from typing import Any
 
 import requests
@@ -47,6 +60,8 @@ from app.config import Settings
 from app.telegram_client import TelegramClient
 
 log = logging.getLogger("ida-telegram.autoreply")
+
+_HISTORY_TEXT_MAX_LENGTH = 500
 
 _TELEGRAM_API_BASE = "https://api.telegram.org"
 _TELEGRAM_FILE_BASE = "https://api.telegram.org/file"
@@ -71,17 +86,20 @@ _ANTHROPIC_VERSION = "2023-06-01"
 _ROUTINE_TEXT_MAX_LENGTH = 65536
 
 
+def _entry_text(entry: dict[str, Any]) -> str:
+    """Text-Darstellung eines einzelnen Eintrags -- fuer den Routine-Trigger-Text
+    und den rollierenden chat_verlauf. Fotos nur als Platzhalter, nie als
+    Bilddaten (die gibt es weiterhin nur einmalig ueber neue_nachrichten_abrufen)."""
+    if entry["kind"] == "photo":
+        return f"[Foto]{' ' + entry['caption'] if entry.get('caption') else ''}"
+    return entry["text"]
+
+
 def _summarize(entries: list[dict[str, Any]]) -> str:
     """Reine Textzusammenfassung fuer das 'text'-Feld beim Routine-Trigger --
     dient nur als sofortiger Kontext-Hinweis, die eigentlichen Bilddaten
     liefert erst neue_nachrichten_abrufen."""
-    parts = []
-    for entry in entries:
-        if entry["kind"] == "text":
-            parts.append(entry["text"])
-        elif entry["kind"] == "photo":
-            parts.append(f"[Foto]{' ' + entry['caption'] if entry.get('caption') else ''}")
-    return "\n".join(parts)
+    return "\n".join(_entry_text(e) for e in entries)
 
 
 class TelegramPoller:
@@ -95,6 +113,30 @@ class TelegramPoller:
 
         self._typing_lock = threading.Lock()
         self._typing_stop_event: threading.Event | None = None
+
+        self._history_lock = threading.Lock()
+        self._history: deque[dict[str, str]] = deque(maxlen=settings.chat_history_length)
+
+    def chat_verlauf(self) -> list[dict[str, str]]:
+        """Vom MCP-Tool chat_verlauf aufgerufen: nicht-destruktiver, rollierender
+        Kurzverlauf der letzten chat_history_length Nachrichten (eingehend UND
+        ausgehend) fuer zusaetzlichen Kontext -- unabhaengig von
+        pending_entries(), beliebig oft abrufbar, liefert also nicht nur
+        einmalig aus."""
+        with self._history_lock:
+            return list(self._history)
+
+    def record_outgoing(self, text: str) -> None:
+        """Von app.server.nachricht_senden aufgerufen, damit chat_verlauf auch
+        die eigenen Antworten zeigt, nicht nur eingehende Nachrichten."""
+        with self._history_lock:
+            self._history.append({"richtung": "ausgehend", "text": text[:_HISTORY_TEXT_MAX_LENGTH]})
+
+    def _record_incoming(self, entries: list[dict[str, Any]]) -> None:
+        with self._history_lock:
+            for entry in entries:
+                text = _entry_text(entry)[:_HISTORY_TEXT_MAX_LENGTH]
+                self._history.append({"richtung": "eingehend", "text": text})
 
     def notify_reply_sent(self) -> None:
         """Von app.server.nachricht_senden aufgerufen, sobald tatsaechlich
@@ -261,6 +303,7 @@ class TelegramPoller:
                 ).start()
 
                 batch = self._collect_batch(entries)
+                self._record_incoming(batch)
                 with self._pending_lock:
                     self._pending_entries.extend(batch)
 
