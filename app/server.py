@@ -24,6 +24,7 @@ from starlette.responses import JSONResponse
 
 from app.auth import BearerAuthMiddleware
 from app.config import load_settings
+from app.memory_store import MemoryStore
 from app.telegram_client import TelegramClient
 from app.telegram_poller import TelegramPoller, start_background
 
@@ -35,18 +36,24 @@ log = logging.getLogger("ida-telegram")
 settings = load_settings()
 client = TelegramClient(settings)
 poller = TelegramPoller(settings, client) if settings.autoreply_enabled else None
+memory = MemoryStore(settings.memory_file_path)
 
 mcp = FastMCP(
     "Ida-Telegram",
     instructions=(
-        "Zwei Werkzeuge fuer die eine fest konfigurierte Person: "
+        "Werkzeuge fuer die eine fest konfigurierte Person: "
         "neue_nachrichten_abrufen liest, was sie gerade geschrieben hat -- "
         "inklusive Fotos als echte Bildinhalte, die direkt angeschaut werden "
         "koennen. Sprachnachrichten werden erkannt, aber nicht transkribiert "
         "(kein Audio-Verstaendnis verfuegbar) -- das steht dann als Hinweistext "
-        "dabei. nachricht_senden schickt eine Antwort. Es gibt keinen "
-        "Empfaenger-Parameter -- beide Tools betreffen immer nur die in "
-        "TELEGRAM_CHAT_ID hinterlegte Person."
+        "dabei. nachricht_senden schickt eine Antwort. gedaechtnis_lesen und "
+        "gedaechtnis_schreiben halten eine kompakte, selbst kuratierte "
+        "Zusammenfassung ueber Neustarts und einzelne Laeufe hinweg fest, "
+        "weil jeder Routine-Trigger sonst bei null anfaengt -- vor dem "
+        "Antworten erst lesen, danach nur bei wirklich wichtigen neuen "
+        "Infos aktualisieren (nicht das ganze Gespraech protokollieren). "
+        "Es gibt keinen Empfaenger-Parameter -- alle Tools betreffen immer "
+        "nur die in TELEGRAM_CHAT_ID hinterlegte Person."
     ),
     host=settings.mcp_host,
     port=settings.mcp_port,
@@ -86,6 +93,31 @@ def neue_nachrichten_abrufen() -> list:
             if entry.get("caption"):
                 content.append(f"Bildunterschrift: {entry['caption']}")
     return content
+
+
+@mcp.tool()
+def gedaechtnis_lesen() -> str:
+    """Liest die aktuell gespeicherte, kompakte Zusammenfassung ueber die
+    Person und bisherige Unterhaltungen. Vor dem Antworten aufrufen, damit
+    nicht bei jedem Lauf alles vergessen ist -- Routine-Trigger starten
+    sonst immer eine leere Sitzung ohne Erinnerung an frühere Läufe. Leerer
+    String, wenn noch nichts gespeichert ist.
+    """
+    return memory.read()
+
+
+@mcp.tool()
+def gedaechtnis_schreiben(text: str) -> dict:
+    """Ueberschreibt die gespeicherte Zusammenfassung komplett mit 'text'.
+    Kein Anhaengen: vorher gedaechtnis_lesen aufrufen, entscheiden was davon
+    noch wichtig ist, veraltetes/irrelevantes weglassen, und eine kompakte,
+    aktuelle Version zurueckschreiben. Nur bei wirklich merkenswerten neuen
+    Infos aufrufen -- nicht das komplette Gespraech protokollieren, das
+    kostet bei jedem zukuenftigen Lauf unnoetig Tokens. Max. 20.000 Zeichen,
+    laengerer Text wird abgeschnitten.
+    """
+    saved = memory.write(text)
+    return {"gespeichert": True, "laenge": len(saved)}
 
 
 @mcp.tool()

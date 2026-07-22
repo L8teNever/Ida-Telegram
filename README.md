@@ -134,15 +134,19 @@ custom connector -> als URL
    Routine**.
 2. **Name:** z.B. "Ida Telegram Autoreply".
 3. **Anweisungen:**
-   > Du bist der Telegram-Assistent. Ruf ueber den Ida-Telegram-Connector das
-   > Tool `neue_nachrichten_abrufen` auf, um zu sehen, was gerade geschrieben
-   > wurde -- das koennen Text, Fotos (die du dir direkt anschauen kannst)
-   > oder Hinweise auf Sprachnachrichten sein. Antworte darauf kurz,
-   > freundlich und hilfreich auf Deutsch, indem du das Tool
-   > `nachricht_senden` verwendest. Bei Sprachnachrichten kannst du den
-   > Inhalt nicht hoeren -- sag das ehrlich und bitte ggf. um eine
-   > Text-Nachricht. Wenn `neue_nachrichten_abrufen` nichts liefert, mach
-   > nichts.
+   > Du bist der Telegram-Assistent. Ruf zuerst ueber den Ida-Telegram-Connector
+   > das Tool `gedaechtnis_lesen` auf, um zu wissen, was du von frueheren
+   > Laeufen bereits weisst (jeder Trigger startet sonst bei null). Ruf dann
+   > `neue_nachrichten_abrufen` auf, um zu sehen, was gerade geschrieben wurde
+   > -- das koennen Text, Fotos (die du dir direkt anschauen kannst) oder
+   > Hinweise auf Sprachnachrichten sein. Antworte darauf kurz, freundlich und
+   > hilfreich auf Deutsch, indem du das Tool `nachricht_senden` verwendest.
+   > Bei Sprachnachrichten kannst du den Inhalt nicht hoeren -- sag das
+   > ehrlich und bitte ggf. um eine Text-Nachricht. Wenn du etwas wirklich
+   > Merkenswertes erfaehrst (Namen, Vorlieben, laufende Themen), aktualisiere
+   > danach `gedaechtnis_schreiben` mit einer kompakten, aktuellen
+   > Zusammenfassung -- nicht das ganze Gespraech protokollieren, nur das
+   > Wichtige. Wenn `neue_nachrichten_abrufen` nichts liefert, mach nichts.
 4. **Trigger:** "API" auswählen (nicht Zeitplan). claude.ai zeigt dir danach
    einmalig einen **API-Token** an (`sk-ant-oat01-...`) -- sofort notieren,
    er wird danach nicht mehr im Klartext angezeigt.
@@ -176,7 +180,30 @@ antwortet über MCP zurück auf Telegram.
 |---|---|
 | `nachricht_senden(text)` | Schickt `text` an die fest konfigurierte Person |
 | `neue_nachrichten_abrufen()` | Gibt zurück, was den aktuellen Routine-Lauf ausgelöst hat (jeweils nur einmal): Text als String, Fotos als echten Bildinhalt, Bildunterschriften als eigener Text, Sprachnachrichten nur als Hinweistext (keine Transkription) |
+| `gedaechtnis_lesen()` | Liest die aktuell gespeicherte, kompakte Zusammenfassung über frühere Läufe |
+| `gedaechtnis_schreiben(text)` | Überschreibt die Zusammenfassung komplett (kein Anhängen) -- max. 20.000 Zeichen |
 | `bot_status()` | Prüft nur, ob Token/Bot erreichbar sind (sendet nichts) |
+
+## Gedächtnis über einzelne Läufe hinweg
+
+Jeder Routine-Trigger startet eine **komplett neue, leere Sitzung** --
+Claude Code Routinen haben von sich aus kein Gedächtnis an frühere Läufe.
+Damit die Antworten trotzdem Kontext haben (und nicht bei jeder Nachricht
+alles neu erklärt werden muss), gibt es einen einfachen, persistenten
+Notiz-Speicher:
+
+- `gedaechtnis_lesen()` -- liefert die aktuelle Zusammenfassung.
+- `gedaechtnis_schreiben(text)` -- **ersetzt** die gespeicherte Zusammenfassung
+  komplett durch `text`. Kein automatisches Anhängen: die Routine liest vorher
+  selbst, entscheidet was noch relevant ist, und schreibt eine kompakte,
+  aktuelle Version zurück.
+
+Das hält den Tokenverbrauch niedrig: statt bei jedem Lauf die komplette
+bisherige Konversation neu zu lesen, liest die Routine nur eine kurze,
+selbst kuratierte Zusammenfassung. Die Datei liegt auf einem eigenen
+Docker-Volume (`ida-telegram-memory`, siehe `docker-compose.yml`) und bleibt
+so auch nach `docker compose up -d --force-recreate` erhalten -- anders als
+der flüchtige `/tmp`-Bereich im Container.
 
 **Unterstützte Nachrichtentypen:**
 

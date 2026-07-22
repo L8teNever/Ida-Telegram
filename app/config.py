@@ -44,6 +44,8 @@ class Settings:
     routine_api_key: str
     autoreply_debounce_seconds: int
 
+    memory_file_path: str
+
 
 def load_settings() -> Settings:
     try:
@@ -70,6 +72,7 @@ def load_settings() -> Settings:
             routine_id=routine_id,
             routine_api_key=routine_api_key,
             autoreply_debounce_seconds=int(_optional("AUTOREPLY_DEBOUNCE_SECONDS", "3")),
+            memory_file_path=_optional("MEMORY_FILE_PATH", "/data/memory.md"),
         )
     except ConfigError as exc:
         print(f"[Ida-Telegram] Konfigurationsfehler: {exc}", file=sys.stderr)
