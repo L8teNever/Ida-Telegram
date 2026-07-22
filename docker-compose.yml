@@ -7,17 +7,17 @@ services:
     # Nur auf localhost binden: von aussen ist der Port NICHT erreichbar,
     # nur der auf demselben Server laufende cloudflared-Tunnel kann ihn
     # ansprechen. Absicherung nach aussen passiert zusaetzlich per Token
-    # (siehe MCP_AUTH_TOKEN) direkt in der Anwendung. Standardport 8001,
+    # (siehe MCP_AUTH_TOKEN) direkt in der Anwendung. Standardport 4567,
     # damit es neben Ida-Untis (8000) auf demselben Server laufen kann.
     ports:
-      - "127.0.0.1:${MCP_PORT:-8001}:8001"
+      - "127.0.0.1:${MCP_PORT:-4567}:4567"
 
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Bitte TELEGRAM_BOT_TOKEN in .env setzen}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?Bitte TELEGRAM_CHAT_ID in .env setzen}
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Bitte MCP_AUTH_TOKEN in .env setzen}
       MCP_HOST: 0.0.0.0
-      MCP_PORT: 8001
+      MCP_PORT: 4567
       # Automatisches Antworten -- ROUTINE_ID/ROUTINE_API_KEY werden nur
       # validiert, wenn AUTOREPLY_ENABLED=true ist (siehe app/config.py).
       AUTOREPLY_ENABLED: ${AUTOREPLY_ENABLED:-true}
@@ -31,7 +31,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4567/healthz', timeout=3)",
         ]
       interval: 30s
       timeout: 5s

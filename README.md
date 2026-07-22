@@ -25,7 +25,7 @@ Tunnel unter einer eigenen Domain erreichbar gemacht.
 Claude (MCP-Client)  --https-->  Cloudflare Tunnel (öffentliche Domain)
                                           |
                                           v
-                              127.0.0.1:8001 auf deinem Server
+                              127.0.0.1:4567 auf deinem Server
                                           |
                                           v
                           Docker-Container "ida-telegram-mcp"
@@ -108,12 +108,12 @@ setzen und später wieder auf `true`.)
 
 ## 3. An den bestehenden Cloudflare Tunnel anbinden
 
-Analog zu Ida-Untis, nur mit eigenem Hostname und Port 8001:
+Analog zu Ida-Untis, nur mit eigenem Hostname und Port 4567:
 
 ```yaml
 ingress:
   - hostname: telegram.deine-domain.de
-    service: http://localhost:8001
+    service: http://localhost:4567
   - service: http_status:404
 ```
 
@@ -200,7 +200,7 @@ Account (Cloud-Agent-Sitzung), nicht eine separate API-Rechnung.
 
 ```bash
 docker compose up -d
-curl -H "Authorization: Bearer $MCP_AUTH_TOKEN" http://127.0.0.1:8001/healthz
+curl -H "Authorization: Bearer $MCP_AUTH_TOKEN" http://127.0.0.1:4567/healthz
 ```
 
 ## Troubleshooting

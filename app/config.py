@@ -65,7 +65,7 @@ def load_settings() -> Settings:
             telegram_chat_id=_require("TELEGRAM_CHAT_ID"),
             mcp_auth_token=mcp_auth_token,
             mcp_host=_optional("MCP_HOST", "0.0.0.0"),
-            mcp_port=int(_optional("MCP_PORT", "8001")),
+            mcp_port=int(_optional("MCP_PORT", "4567")),
             autoreply_enabled=autoreply_enabled,
             routine_id=routine_id,
             routine_api_key=routine_api_key,
