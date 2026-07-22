@@ -28,6 +28,14 @@ log = logging.getLogger("ida-telegram")
 settings = load_settings()
 client = TelegramClient(settings)
 
+if settings.autoreply_enabled:
+    from app.claude_client import ClaudeClient
+    from app.telegram_poller import start_background
+
+    _claude_client = ClaudeClient(settings)
+else:
+    _claude_client = None
+
 mcp = FastMCP(
     "Ida-Telegram",
     instructions=(
@@ -77,6 +85,10 @@ def main() -> None:
         settings.mcp_host,
         settings.mcp_port,
     )
+    if settings.autoreply_enabled:
+        start_background(settings, client, _claude_client)
+    else:
+        log.info("AUTOREPLY_ENABLED=false -- automatisches Antworten ist deaktiviert.")
     # access_log=False: uvicorn wuerde sonst jede Request-Zeile inkl. vollem
     # Pfad loggen -- und damit ein per ?token= mitgeschicktes MCP_AUTH_TOKEN
     # im Klartext in die Docker-Logs schreiben.

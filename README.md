@@ -1,25 +1,40 @@
 # Ida-Telegram
 
 Ein eigenständiger MCP-Server (Model Context Protocol), getrennt von
-Ida-Untis und ohne Verbindung dazu. Gibt Claude genau ein Werkzeug: einer
-fest konfigurierten Person eine Telegram-Nachricht schicken. Läuft als
-Docker-Container und wird über einen bestehenden Cloudflare Tunnel unter
-einer eigenen Domain erreichbar gemacht.
+Ida-Untis und ohne Verbindung dazu. Zwei Dinge in einem Container:
+
+1. Ein MCP-Werkzeug für Claude: einer fest konfigurierten Person eine
+   Telegram-Nachricht schicken.
+2. Ein automatischer Antwort-Bot: sobald diese Person dem Telegram-Bot
+   schreibt, liest der Server die Nachricht und lässt sie direkt über die
+   Claude-API (Anthropic) beantworten -- unabhängig vom MCP-Tool, läuft im
+   Hintergrund im selben Container.
+
+Läuft als Docker-Container und wird über einen bestehenden Cloudflare
+Tunnel unter einer eigenen Domain erreichbar gemacht.
 
 ## Architektur
 
 ```
-Claude  --https-->  Cloudflare Tunnel (öffentliche Domain)
-                            |
-                            v
-                 127.0.0.1:8001 auf deinem Server
-                            |
-                            v
-              Docker-Container "ida-telegram-mcp"
-                            |
-                            v
-                    Telegram Bot HTTP-API
+Claude (MCP)  --https-->  Cloudflare Tunnel (öffentliche Domain)
+                                  |
+                                  v
+                       127.0.0.1:8001 auf deinem Server
+                                  |
+                                  v
+                    Docker-Container "ida-telegram-mcp"
+                       |                        |
+                       v                        v
+              Telegram Bot HTTP-API      Claude API (Anthropic)
+                       ^
+                       | (long-polling, ausgehend)
+                  Telegram-Nutzer schreibt dem Bot
 ```
+
+Der Auto-Antwort-Teil braucht **keinen** zusätzlichen öffentlichen Endpunkt:
+der Container fragt Telegram aktiv per Long-Polling ab (ausgehende
+Verbindung), es muss also nichts zusätzlich im Cloudflare Tunnel
+freigeschaltet werden.
 
 Der Container published seinen Port **nur auf `127.0.0.1`** -- von außen
 nicht direkt erreichbar, nur über den bereits laufenden `cloudflared`-Prozess.
@@ -67,7 +82,20 @@ cp .env.example .env
 | `TELEGRAM_CHAT_ID` | Die eine feste Ziel-Person (siehe Schritt 1) |
 | `MCP_AUTH_TOKEN` | Langes Zufalls-Token, das Claude beim Verbinden mitschicken muss. Erzeugen mit `openssl rand -hex 32` |
 | `MCP_PORT` | Lokaler Port (Standard `8001`, damit es neben Ida-Untis auf 8000 laufen kann) |
+| `AUTOREPLY_ENABLED` | `true`/`false` -- automatisches Antworten an/aus (Standard `true`) |
+| `ANTHROPIC_API_KEY` | API-Key von [console.anthropic.com](https://console.anthropic.com) -> API Keys. Nur nötig, wenn `AUTOREPLY_ENABLED=true` |
+| `CLAUDE_MODEL` | Modell für automatische Antworten (Standard `claude-opus-4-8`) |
+| `CLAUDE_EFFORT` | `low`/`medium`/`high`/`xhigh`/`max` -- wie gründlich (und teuer) Claude nachdenkt (Standard `medium`) |
+| `CLAUDE_SYSTEM_PROMPT` | Persona/Verhalten der automatischen Antworten, frei anpassbar |
+| `AUTOREPLY_DEBOUNCE_SECONDS` | Wartezeit nach der letzten Nachricht, bevor geantwortet wird (Standard `3`) |
 | `GITHUB_OWNER` | Dein GitHub-Benutzername in Kleinbuchstaben (für das Image aus GHCR) |
+
+**Der Standard-System-Prompt** (in `.env.example` schon vorausgefüllt, direkt
+anpassbar):
+
+> Du antwortest automatisch auf Telegram-Nachrichten für den Kontobesitzer.
+> Antworte kurz, freundlich und hilfreich auf Deutsch. Wenn du etwas nicht
+> sicher beantworten kannst, sag das ehrlich statt zu raten.
 
 ## 3. Image bauen lassen (GitHub Actions)
 
@@ -131,6 +159,30 @@ OAuth-Felder leer lassen.
 | `nachricht_senden(text)` | Schickt `text` an die fest konfigurierte Person |
 | `bot_status()` | Prüft nur, ob Token/Bot erreichbar sind (sendet nichts) |
 
+## Automatisches Antworten
+
+Wenn `AUTOREPLY_ENABLED=true` (Standard) läuft im selben Container ein
+Hintergrund-Loop:
+
+1. Fragt Telegram per Long-Polling nach neuen Nachrichten der konfigurierten
+   Person (`TELEGRAM_CHAT_ID`) -- Nachrichten von anderen werden ignoriert.
+2. Kommen mehrere Nachrichten schnell hintereinander, wartet der Server
+   `AUTOREPLY_DEBOUNCE_SECONDS` auf weiteren Nachschub und bündelt alles zu
+   **einer** Anfrage an Claude -- so wird nicht auf jede einzelne Nachricht
+   separat reagiert.
+3. Schickt den gebündelten Text an die Claude-API (`CLAUDE_MODEL`, gesteuert
+   über `CLAUDE_SYSTEM_PROMPT` und `CLAUDE_EFFORT`) und schickt die Antwort
+   automatisch über den Bot zurück.
+
+Kein Doppelt-Antworten: Telegrams `getUpdates`-Offset-Mechanismus sorgt von
+selbst dafür, dass jede Nachricht genau einmal verarbeitet wird, auch nach
+einem Neustart des Containers.
+
+**Kosten:** Jede Antwort kostet einen Claude-API-Call auf deinem
+`ANTHROPIC_API_KEY` (separates Abrechnungskonto, nicht deine
+claude.ai/Claude-Code-Nutzung). Mit `CLAUDE_MODEL`/`CLAUDE_EFFORT` lässt sich
+das steuern.
+
 ## Lokal testen ohne Cloudflare
 
 ```bash
@@ -146,3 +198,11 @@ curl -H "Authorization: Bearer $MCP_AUTH_TOKEN" http://127.0.0.1:8001/healthz
   nie geschrieben (siehe Schritt 1.3), oder die `chat_id` ist falsch.
 - **`Telegram-API-Fehler: Unauthorized`**: `TELEGRAM_BOT_TOKEN` falsch/abgelaufen.
 - **Claude bekommt 401**: Token in Client-Konfiguration und `.env` vergleichen.
+- **Autoreply antwortet nicht**: `docker compose logs -f` prüfen -- Zeile
+  "Telegram-Autoreply-Loop gestartet" sollte beim Start erscheinen. Häufigste
+  Ursache: `ANTHROPIC_API_KEY` fehlt/falsch, oder die Zielperson hat dem Bot
+  noch nie geschrieben (siehe Schritt 1.3).
+- **`Conflict: terminated by other getUpdates request`**: Der Bot-Token wird
+  gleichzeitig noch woanders per `getUpdates` abgefragt (oder es ist ein
+  Webhook für den Bot gesetzt) -- ein Telegram-Bot-Token kann immer nur von
+  einem Prozess gleichzeitig per Long-Polling abgefragt werden.
