@@ -9,9 +9,13 @@ dieser Server kann strukturell nur an die eine konfigurierte Person schreiben.
 
 Wenn AUTOREPLY_ENABLED=true erkennt ein Hintergrund-Loop (app/telegram_poller.py)
 neue Telegram-Nachrichten und triggert dafuer eine claude.ai Routine ueber
-deren eigenen API-Token (ROUTINE_TRIGGER_URL/ROUTINE_API_KEY). Der Container
-ruft dabei selbst keine Claude-API auf -- die Routine liest die Nachricht(en)
+deren eigenen API-Token (ROUTINE_ID/ROUTINE_API_KEY). Der Container ruft
+dabei selbst keine Claude-API auf -- die Routine liest die Nachricht(en)
 ueber das Tool neue_nachrichten_abrufen und antwortet ueber nachricht_senden.
+
+Persistentes, themenuebergreifendes Wissen (ueber diesen einen Bot hinaus)
+liegt NICHT hier, sondern im separaten Ida-Memory MCP-Server, den die
+Routine zusaetzlich als eigenen Connector nutzt.
 """
 
 from __future__ import annotations
@@ -24,7 +28,6 @@ from starlette.responses import JSONResponse
 
 from app.auth import BearerAuthMiddleware
 from app.config import load_settings
-from app.memory_store import MemoryError, MemoryStore
 from app.telegram_client import TelegramClient
 from app.telegram_poller import TelegramPoller, start_background
 
@@ -36,7 +39,6 @@ log = logging.getLogger("ida-telegram")
 settings = load_settings()
 client = TelegramClient(settings)
 poller = TelegramPoller(settings, client) if settings.autoreply_enabled else None
-memory = MemoryStore(settings.memory_dir)
 
 mcp = FastMCP(
     "Ida-Telegram",
@@ -46,21 +48,9 @@ mcp = FastMCP(
         "inklusive Fotos als echte Bildinhalte, die direkt angeschaut werden "
         "koennen. Sprachnachrichten werden erkannt, aber nicht transkribiert "
         "(kein Audio-Verstaendnis verfuegbar) -- das steht dann als Hinweistext "
-        "dabei. nachricht_senden schickt eine Antwort. "
-        "\n\n"
-        "Gedaechtnis (weil jeder Routine-Trigger sonst bei null anfaengt): "
-        "in mehrere Themen-Dateien aufgeteilt statt einer einzigen. Immer "
-        "zuerst gedaechtnis_uebersicht aufrufen (eine Zeile pro Themen-"
-        "Datei) -- anhand der Beschreibungen entscheiden, welche Datei(en) "
-        "fuer die aktuelle Nachricht ueberhaupt relevant sind, und nur die "
-        "gezielt mit gedaechtnis_lesen(datei) laden. Nach dem Antworten nur "
-        "bei wirklich merkenswerten neuen Infos mit gedaechtnis_schreiben "
-        "aktualisieren -- passende bestehende Datei wiederverwenden oder "
-        "bei neuem Themenbereich einen neuen Dateinamen waehlen, keine "
-        "zentrale Struktur muss dafuer angepasst werden. Nicht das ganze "
-        "Gespraech protokollieren, nur das kompakt Wichtige. "
-        "Es gibt keinen Empfaenger-Parameter -- alle Tools betreffen immer "
-        "nur die in TELEGRAM_CHAT_ID hinterlegte Person."
+        "dabei. nachricht_senden schickt eine Antwort. Es gibt keinen "
+        "Empfaenger-Parameter -- beide Tools betreffen immer nur die in "
+        "TELEGRAM_CHAT_ID hinterlegte Person."
     ),
     host=settings.mcp_host,
     port=settings.mcp_port,
@@ -100,55 +90,6 @@ def neue_nachrichten_abrufen() -> list:
             if entry.get("caption"):
                 content.append(f"Bildunterschrift: {entry['caption']}")
     return content
-
-
-@mcp.tool()
-def gedaechtnis_uebersicht() -> str:
-    """Zeigt alle vorhandenen Gedaechtnis-Themen mit Kurzbeschreibung (eine
-    Zeile pro Themen-Datei) -- OHNE deren Inhalt zu laden. IMMER als erstes
-    aufrufen, bevor du antwortest: das zeigt dir kompakt und guenstig, was es
-    an Wissen gibt. Anhand der Beschreibungen entscheidest du, welche
-    Datei(en) fuer die aktuelle Nachricht ueberhaupt relevant sind, und
-    liest nur die gezielt mit gedaechtnis_lesen -- nicht jede vorhandene
-    Datei durchlesen, das waere unnoetig teuer.
-    """
-    return memory.overview()
-
-
-@mcp.tool()
-def gedaechtnis_lesen(datei: str) -> str:
-    """Liest den vollen Inhalt einer einzelnen Themen-Datei.
-
-    datei: Name ohne .md-Endung, wie in gedaechtnis_uebersicht angezeigt
-    (z.B. "person"). Leerer String, wenn die Datei noch nicht existiert.
-    """
-    return memory.read(datei)
-
-
-@mcp.tool()
-def gedaechtnis_schreiben(datei: str, inhalt: str) -> dict:
-    """Erstellt oder ueberschreibt eine einzelne Themen-Datei komplett (kein
-    Anhaengen).
-
-    datei: Name ohne .md-Endung, nur Buchstaben/Zahlen/_/- (z.B. "person",
-    "projekte", "termine"). Fuer ein neues Themengebiet einfach einen neuen,
-    treffenden Namen waehlen -- taucht automatisch in der naechsten
-    gedaechtnis_uebersicht auf, keine zentrale Struktur muss angepasst
-    werden. Fuer bestehende Themen den gleichen Namen wiederverwenden statt
-    Duplikate anzulegen.
-
-    inhalt: die ERSTE ZEILE wird die Kurzbeschreibung in
-    gedaechtnis_uebersicht -- also kurz und praegnant. Danach frei nutzbarer
-    Inhalt, kann sich mit [[anderer-dateiname]] auf andere Themen-Dateien
-    beziehen. Nur wirklich merkenswerte, kompakte Fakten speichern, nicht
-    das ganze Gespraech protokollieren -- das kostet bei jedem zukuenftigen
-    Lauf unnoetig Tokens. Max. 20.000 Zeichen pro Datei.
-    """
-    try:
-        saved = memory.write(datei, inhalt)
-    except MemoryError as exc:
-        return {"gespeichert": False, "fehler": str(exc)}
-    return {"gespeichert": True, "datei": datei, "laenge": len(saved)}
 
 
 @mcp.tool()

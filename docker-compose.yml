@@ -24,13 +24,6 @@ services:
       ROUTINE_ID: ${ROUTINE_ID:-}
       ROUTINE_API_KEY: ${ROUTINE_API_KEY:-}
       AUTOREPLY_DEBOUNCE_SECONDS: ${AUTOREPLY_DEBOUNCE_SECONDS:-3}
-      MEMORY_DIR: /data/memory
-
-    # Persistiert die Gedaechtnis-Themen-Dateien (gedaechtnis_uebersicht/
-    # _lesen/_schreiben) ueber Neustarts/Recreates hinweg -- anders als
-    # /tmp bleibt das erhalten.
-    volumes:
-      - ida-telegram-memory:/data
 
     healthcheck:
       test:
@@ -47,8 +40,7 @@ services:
 
     # Sicherheits-Haertung: kein root im Container (siehe Dockerfile),
     # keine neuen Privilegien, alle Linux-Capabilities entfernt, Dateisystem
-    # read-only (nur /tmp fuer temporaere Dateien und das /data-Volume oben
-    # fuer das Gedaechtnis-File sind beschreibbar).
+    # read-only (nur /tmp beschreibbar fuer temporaere Dateien).
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -62,6 +54,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-volumes:
-  ida-telegram-memory:

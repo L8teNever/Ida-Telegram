@@ -12,15 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
-    && chown -R appuser:appuser /app \
-    && mkdir -p /data \
-    && chown -R appuser:appuser /data
+    && chown -R appuser:appuser /app
 USER appuser
-
-# /data wird auf ein Docker-Volume gemountet (siehe docker-compose.yml) --
-# persistiert das Gedaechtnis-File der Routine ueber Neustarts hinweg,
-# unabhaengig vom sonst read-only Container-Dateisystem.
-VOLUME ["/data"]
 
 EXPOSE 4567
 
