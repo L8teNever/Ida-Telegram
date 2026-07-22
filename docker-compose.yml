@@ -1,0 +1,50 @@
+services:
+  ida-telegram-mcp:
+    image: ghcr.io/${GITHUB_OWNER:-l8tenever}/ida-telegram:${IMAGE_TAG:-latest}
+    container_name: ida-telegram-mcp
+    restart: unless-stopped
+
+    # Nur auf localhost binden: von aussen ist der Port NICHT erreichbar,
+    # nur der auf demselben Server laufende cloudflared-Tunnel kann ihn
+    # ansprechen. Absicherung nach aussen passiert zusaetzlich per Token
+    # (siehe MCP_AUTH_TOKEN) direkt in der Anwendung. Standardport 8001,
+    # damit es neben Ida-Untis (8000) auf demselben Server laufen kann.
+    ports:
+      - "127.0.0.1:${MCP_PORT:-8001}:8001"
+
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Bitte TELEGRAM_BOT_TOKEN in .env setzen}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?Bitte TELEGRAM_CHAT_ID in .env setzen}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Bitte MCP_AUTH_TOKEN in .env setzen}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8001
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    # Sicherheits-Haertung: kein root im Container (siehe Dockerfile),
+    # keine neuen Privilegien, alle Linux-Capabilities entfernt, Dateisystem
+    # read-only (nur /tmp beschreibbar fuer temporaere Dateien).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
