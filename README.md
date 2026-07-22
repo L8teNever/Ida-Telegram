@@ -135,18 +135,26 @@ custom connector -> als URL
 2. **Name:** z.B. "Ida Telegram Autoreply".
 3. **Anweisungen:**
    > Du bist der Telegram-Assistent. Ruf zuerst ueber den Ida-Telegram-Connector
-   > das Tool `gedaechtnis_lesen` auf, um zu wissen, was du von frueheren
-   > Laeufen bereits weisst (jeder Trigger startet sonst bei null). Ruf dann
-   > `neue_nachrichten_abrufen` auf, um zu sehen, was gerade geschrieben wurde
-   > -- das koennen Text, Fotos (die du dir direkt anschauen kannst) oder
-   > Hinweise auf Sprachnachrichten sein. Antworte darauf kurz, freundlich und
-   > hilfreich auf Deutsch, indem du das Tool `nachricht_senden` verwendest.
-   > Bei Sprachnachrichten kannst du den Inhalt nicht hoeren -- sag das
-   > ehrlich und bitte ggf. um eine Text-Nachricht. Wenn du etwas wirklich
-   > Merkenswertes erfaehrst (Namen, Vorlieben, laufende Themen), aktualisiere
-   > danach `gedaechtnis_schreiben` mit einer kompakten, aktuellen
-   > Zusammenfassung -- nicht das ganze Gespraech protokollieren, nur das
-   > Wichtige. Wenn `neue_nachrichten_abrufen` nichts liefert, mach nichts.
+   > das Tool `gedaechtnis_uebersicht` auf, um zu sehen, welche Themen-Dateien
+   > es gibt (jeder Trigger startet sonst bei null, ohne Erinnerung an
+   > fruehere Laeufe). Entscheide anhand der Kurzbeschreibungen, welche
+   > Datei(en) fuer die aktuelle Nachricht relevant sein koennten, und lies
+   > nur die gezielt mit `gedaechtnis_lesen(datei)` -- nicht alle Dateien
+   > durchlesen. Ruf dann `neue_nachrichten_abrufen` auf, um zu sehen, was
+   > gerade geschrieben wurde -- das koennen Text, Fotos (die du dir direkt
+   > anschauen kannst) oder Hinweise auf Sprachnachrichten sein. Antworte
+   > darauf kurz, freundlich und hilfreich auf Deutsch, indem du das Tool
+   > `nachricht_senden` verwendest. Bei Sprachnachrichten kannst du den
+   > Inhalt nicht hoeren -- sag das ehrlich und bitte ggf. um eine
+   > Text-Nachricht. Wenn du etwas wirklich Merkenswertes erfaehrst (Namen,
+   > Vorlieben, laufende Themen), aktualisiere danach mit
+   > `gedaechtnis_schreiben(datei, inhalt)` die passende Themen-Datei --
+   > bestehenden Namen wiederverwenden wenn es dazu passt (z.B. "person"),
+   > bei einem wirklich neuen Themenbereich einen neuen Dateinamen waehlen.
+   > Erste Zeile von `inhalt` immer kurz und praegnant, das wird die
+   > Beschreibung in der Uebersicht. Nicht das ganze Gespraech protokollieren,
+   > nur das Wichtige, kompakt. Wenn `neue_nachrichten_abrufen` nichts
+   > liefert, mach nichts.
 4. **Trigger:** "API" auswählen (nicht Zeitplan). claude.ai zeigt dir danach
    einmalig einen **API-Token** an (`sk-ant-oat01-...`) -- sofort notieren,
    er wird danach nicht mehr im Klartext angezeigt.
@@ -180,30 +188,44 @@ antwortet über MCP zurück auf Telegram.
 |---|---|
 | `nachricht_senden(text)` | Schickt `text` an die fest konfigurierte Person |
 | `neue_nachrichten_abrufen()` | Gibt zurück, was den aktuellen Routine-Lauf ausgelöst hat (jeweils nur einmal): Text als String, Fotos als echten Bildinhalt, Bildunterschriften als eigener Text, Sprachnachrichten nur als Hinweistext (keine Transkription) |
-| `gedaechtnis_lesen()` | Liest die aktuell gespeicherte, kompakte Zusammenfassung über frühere Läufe |
-| `gedaechtnis_schreiben(text)` | Überschreibt die Zusammenfassung komplett (kein Anhängen) -- max. 20.000 Zeichen |
+| `gedaechtnis_uebersicht()` | Eine Zeile pro Themen-Datei (Name + Kurzbeschreibung), ohne deren Inhalt zu laden |
+| `gedaechtnis_lesen(datei)` | Liest den vollen Inhalt einer einzelnen Themen-Datei |
+| `gedaechtnis_schreiben(datei, inhalt)` | Erstellt/überschreibt eine einzelne Themen-Datei komplett (kein Anhängen) -- max. 20.000 Zeichen |
 | `bot_status()` | Prüft nur, ob Token/Bot erreichbar sind (sendet nichts) |
 
 ## Gedächtnis über einzelne Läufe hinweg
 
 Jeder Routine-Trigger startet eine **komplett neue, leere Sitzung** --
 Claude Code Routinen haben von sich aus kein Gedächtnis an frühere Läufe.
-Damit die Antworten trotzdem Kontext haben (und nicht bei jeder Nachricht
-alles neu erklärt werden muss), gibt es einen einfachen, persistenten
-Notiz-Speicher:
+Ein einzelnes, immer komplett gelesenes Gedächtnis-File würde außerdem mit
+der Zeit wachsen und pro Lauf immer mehr Tokens kosten. Deshalb ist das
+Gedächtnis wie ein kleines Wiki aufgebaut -- mehrere Themen-Dateien statt
+einer:
 
-- `gedaechtnis_lesen()` -- liefert die aktuelle Zusammenfassung.
-- `gedaechtnis_schreiben(text)` -- **ersetzt** die gespeicherte Zusammenfassung
-  komplett durch `text`. Kein automatisches Anhängen: die Routine liest vorher
-  selbst, entscheidet was noch relevant ist, und schreibt eine kompakte,
-  aktuelle Version zurück.
+- `gedaechtnis_uebersicht()` -- zeigt **nur** eine Zeile pro Themen-Datei
+  (Dateiname + ihre erste Zeile als Kurzbeschreibung), ohne den Rest zu
+  laden. Immer zuerst aufrufen.
+- `gedaechtnis_lesen(datei)` -- lädt den vollen Inhalt einer einzelnen,
+  anhand der Übersicht als relevant erkannten Datei.
+- `gedaechtnis_schreiben(datei, inhalt)` -- erstellt oder **ersetzt** eine
+  einzelne Themen-Datei komplett. Die erste Zeile von `inhalt` wird die
+  Kurzbeschreibung in der Übersicht.
+
+Neue Themen brauchen keine Strukturänderung: ein neuer, thematisch
+passender Dateiname (z.B. `projekte`, `termine`) taucht automatisch in der
+nächsten `gedaechtnis_uebersicht` auf. Dateien können sich per
+`[[anderer-dateiname]]` aufeinander beziehen (reine Text-Konvention für die
+Routine selbst, keine technische Verlinkung). Dateinamen sind auf
+Buchstaben/Zahlen/`_`/`-` beschränkt (kein Path Traversal möglich, per Test
+verifiziert).
 
 Das hält den Tokenverbrauch niedrig: statt bei jedem Lauf die komplette
-bisherige Konversation neu zu lesen, liest die Routine nur eine kurze,
-selbst kuratierte Zusammenfassung. Die Datei liegt auf einem eigenen
-Docker-Volume (`ida-telegram-memory`, siehe `docker-compose.yml`) und bleibt
-so auch nach `docker compose up -d --force-recreate` erhalten -- anders als
-der flüchtige `/tmp`-Bereich im Container.
+bisherige Konversation oder ein einzelnes, immer größer werdendes File zu
+lesen, liest die Routine erst die günstige Übersicht und danach gezielt nur
+die tatsächlich relevante(n) Datei(en). Die Dateien liegen auf einem eigenen
+Docker-Volume (`ida-telegram-memory`, siehe `docker-compose.yml`) und
+bleiben so auch nach `docker compose up -d --force-recreate` erhalten --
+anders als der flüchtige `/tmp`-Bereich im Container.
 
 **Unterstützte Nachrichtentypen:**
 

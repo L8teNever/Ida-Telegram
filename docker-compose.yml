@@ -24,10 +24,11 @@ services:
       ROUTINE_ID: ${ROUTINE_ID:-}
       ROUTINE_API_KEY: ${ROUTINE_API_KEY:-}
       AUTOREPLY_DEBOUNCE_SECONDS: ${AUTOREPLY_DEBOUNCE_SECONDS:-3}
-      MEMORY_FILE_PATH: /data/memory.md
+      MEMORY_DIR: /data/memory
 
-    # Persistiert das Gedaechtnis-File (gedaechtnis_lesen/gedaechtnis_schreiben)
-    # ueber Neustarts/Recreates hinweg -- anders als /tmp bleibt das erhalten.
+    # Persistiert die Gedaechtnis-Themen-Dateien (gedaechtnis_uebersicht/
+    # _lesen/_schreiben) ueber Neustarts/Recreates hinweg -- anders als
+    # /tmp bleibt das erhalten.
     volumes:
       - ida-telegram-memory:/data
 
