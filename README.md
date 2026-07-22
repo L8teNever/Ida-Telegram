@@ -143,20 +143,34 @@ custom connector -> als URL
    > direkt anschauen kannst) oder Hinweise auf Sprachnachrichten sein.
    > Liefert das Tool nichts, mach nichts und brich ab.
    >
-   > 2. Gedaechtnis pruefen, BEVOR du antwortest: Nutze den
-   > Ida-Memory-Connector, um zu sehen, ob zum Thema der Nachricht schon
-   > etwas gespeichert ist -- `search_nodes` mit den wichtigsten Stichworten
-   > aus der Nachricht (Namen, Projekte, Themen). Bei relevanten Treffern mit
-   > `open_nodes` die genauen Eintraege nachladen. Kein `read_graph`
-   > benutzen -- das laedt unnoetig den kompletten Bestand.
+   > 2. Kontext holen: Ruf zusaetzlich `chat_verlauf` auf, um die letzten
+   > Nachrichten (beide Richtungen) zu sehen -- hilft z.B. zu verstehen,
+   > worauf sich eine kurze Nachricht bezieht.
    >
-   > 3. Antworten: Kurze, freundliche, hilfreiche Antwort auf Deutsch ueber
-   > `nachricht_senden`. Relevante Infos aus Schritt 2 einbauen, wenn sie zur
-   > Nachricht passen. Bei Sprachnachrichten kannst du den Inhalt nicht
+   > 3. Gedaechtnis pruefen, BEVOR du antwortest -- aber nur wenn noetig:
+   > Wenn du die Antwort schon aus der Nachricht selbst oder aus
+   > `chat_verlauf` kennst, ueberspring diesen Schritt. Sonst nutze den
+   > Ida-Memory-Connector: `search_nodes` mit den wichtigsten Stichworten aus
+   > der Nachricht (Namen, Projekte, Themen). Bei relevanten Treffern mit
+   > `open_nodes` die genauen Eintraege nachladen. Kein `read_graph`
+   > benutzen -- das laedt unnoetig den kompletten Bestand. Findest du nichts
+   > und weisst es auch sonst nicht -- sag ehrlich, dass du es nicht weisst,
+   > statt etwas zu erfinden.
+   >
+   > 4. Antworten: Kurze, freundliche, hilfreiche Antwort auf Deutsch ueber
+   > `nachricht_senden`. Relevante Infos aus Schritt 2/3 einbauen, wenn sie
+   > zur Nachricht passen. Bei Sprachnachrichten kannst du den Inhalt nicht
    > hoeren -- sag das ehrlich und bitte ggf. um eine Text-Nachricht.
    >
-   > 4. Gedaechtnis aktualisieren, NACH der Antwort: Enthaelt die Nachricht
-   > einen dauerhaft nuetzlichen Fakt (Vorliebe, laufendes Projekt,
+   > 5. Essensplan-Sonderfall: Wenn ein Foto ein Essensplan fuer die Woche
+   > ist, merke dir NUR das Mittagessen pro Tag (z.B. als Entity "Essensplan
+   > KW<Nummer>" mit einer observation pro Tag, "Montag: Spaghetti
+   > Bolognese"). Fruehstueck und Abendessen auf demselben Bild ignorierst
+   > du, auch wenn sie draufstehen. Wird spaeter nach dem Essen an einem
+   > bestimmten Tag gefragt: wie in Schritt 3 im Gedaechtnis nachschauen.
+   >
+   > 6. Gedaechtnis aktualisieren, NACH der Antwort: Enthaelt die Nachricht
+   > sonst einen dauerhaft nuetzlichen Fakt (Vorliebe, laufendes Projekt,
    > wiederkehrende Info, Korrektur zu etwas Gespeichertem) -- ueber
    > Ida-Memory speichern: `create_entities` nur fuer neue Personen/Projekte/
    > Themen, `add_observations` fuer neue Fakten zu bestehenden Entities
@@ -194,9 +208,14 @@ antwortet über MCP zurück auf Telegram.
 
 | Tool | Zweck |
 |---|---|
-| `nachricht_senden(text)` | Schickt `text` an die fest konfigurierte Person |
+| `nachricht_senden(text)` | Schickt `text` an die fest konfigurierte Person. Stoppt dabei automatisch die "tippt..."-Anzeige und trägt die Antwort in `chat_verlauf` ein |
 | `neue_nachrichten_abrufen()` | Gibt zurück, was den aktuellen Routine-Lauf ausgelöst hat (jeweils nur einmal): Text als String, Fotos als echten Bildinhalt, Bildunterschriften als eigener Text, Sprachnachrichten nur als Hinweistext (keine Transkription) |
+| `chat_verlauf()` | Letzte `CHAT_HISTORY_LENGTH` Nachrichten (Standard 5, beide Richtungen) als leichtgewichtiger Text -- fürs Gesprächsgedächtnis über den aktuellen Lauf hinaus. Nicht destruktiv, beliebig oft abrufbar. Fotos nur als `[Foto]`-Platzhalter, keine Bilddaten |
 | `bot_status()` | Prüft nur, ob Token/Bot erreichbar sind (sendet nichts) |
+
+Während ein Routine-Lauf auf eine Antwort wartet, zeigt der Bot in Telegram
+automatisch "tippt..." an (aktualisiert alle 4s, damit es nicht ausblendet) --
+kein eigenes Tool dafür nötig, das läuft im Hintergrund mit.
 
 Persistentes Gedächtnis (über einzelne Routine-Läufe hinweg, gemeinsam
 nutzbar von mehreren KIs/Connectors) liegt bewusst **nicht** hier, sondern
